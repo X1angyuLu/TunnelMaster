@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import Foundation
 import SwiftUI
 import TunnelMasterCore
@@ -14,6 +15,18 @@ enum ConnectionStatus {
     case connecting
     case connected
     case disconnecting
+}
+
+enum ConfigurationChange {
+    case mode, rules, profile
+
+    var title: String {
+        switch self {
+        case .mode: "正在切换模式…"
+        case .rules: "正在保存规则…"
+        case .profile: "正在导入配置…"
+        }
+    }
 }
 
 struct TrafficSnapshot {
@@ -49,7 +62,7 @@ final class TunnelStore: ObservableObject {
     @Published private(set) var hasRuleEngine = MihomoSession.executable != nil
     @Published private(set) var needsProxyRecovery = false
     @Published private(set) var changedNetwork = false
-    @Published private(set) var changingMode = false
+    @Published private(set) var configurationChange: ConfigurationChange?
     @Published private(set) var connectedAt: Date?
     @Published private(set) var traffic: TrafficSnapshot?
     @Published private(set) var trafficHistory: [TrafficSample] = []
@@ -61,6 +74,7 @@ final class TunnelStore: ObservableObject {
     private let systemProxy: SystemProxyController
     private let historyStore: TrafficHistoryStore
     private var profile: WireGuardProfile?
+    private var exitCheckID: UUID?
     private var session: MihomoSession?
     private var monitor: Timer?
     private var metricsTask: Task<Void, Never>?
@@ -98,9 +112,9 @@ final class TunnelStore: ObservableObject {
             try Self.prepareStorage(storage)
             let file = storage.appendingPathComponent("profile.conf")
             if FileManager.default.fileExists(atPath: file.path) {
-                profile = try WireGuardProfile.parse(String(contentsOf: file, encoding: .utf8))
-                profileName = (try? String(contentsOf: storage.appendingPathComponent("profile-name.txt"), encoding: .utf8))
-                    .flatMap { $0.isEmpty ? nil : $0 } ?? "本机配置"
+                let contents = try String(contentsOf: file, encoding: .utf8)
+                profile = try WireGuardProfile.parse(contents)
+                profileName = ImportedWireGuardProfile.storedName(in: contents, storage: storage)
             }
         } catch {
             errorMessage = "无法读取本机 WireGuard 配置。请重新导入。"
@@ -113,10 +127,16 @@ final class TunnelStore: ObservableObject {
     }
 
     func importProfile() {
-        guard status == .disconnected else { return }
+        guard canEditConfiguration else { return }
+        let wasConnected = status == .connected
+        let liveSession = session
+        configurationChange = .profile
         let picker = NSOpenPanel()
         picker.title = "导入 WireGuard 配置"
         picker.prompt = "导入"
+        if wasConnected {
+            picker.message = "新配置会应用到当前连接。切换节点时，部分应用可能需要重新连接。"
+        }
         picker.canChooseFiles = true
         picker.canChooseDirectories = false
         picker.allowsMultipleSelection = false
@@ -124,40 +144,71 @@ final class TunnelStore: ObservableObject {
             picker.allowedContentTypes = [profileType]
         }
         NSApplication.shared.activate(ignoringOtherApps: true)
-        guard picker.runModal() == .OK, let url = picker.url else { return }
+        guard picker.runModal() == .OK, let url = picker.url else {
+            configurationChange = nil
+            return
+        }
 
-        do {
-            let file = try String(contentsOf: url, encoding: .utf8)
-            let parsed = try WireGuardProfile.parse(file)
-            try Self.prepareStorage(storage)
-            let name = url.deletingPathExtension().lastPathComponent
-            try Self.privateWrite(Data(name.utf8), to: storage.appendingPathComponent("profile-name.txt"))
-            try Self.privateWrite(Data(file.utf8), to: storage.appendingPathComponent("profile.conf"))
-            profile = parsed
-            profileName = name
-            errorMessage = nil
-        } catch {
-            errorMessage = "导入失败。\(error.localizedDescription)"
+        errorMessage = nil
+        Task {
+            var updateExit = false
+            defer {
+                configurationChange = nil
+                if updateExit { checkExit() }
+            }
+            do {
+                let candidate = try await Task.detached { try ImportedWireGuardProfile(url: url) }.value
+                let storage = self.storage
+                if wasConnected {
+                    guard let liveSession, let profile else { throw SessionError.configurationUnavailable }
+                    let rules = try routingRules(for: mode)
+                    let previous = MihomoSession.Configuration(profile: profile, rules: rules)
+                    let next = MihomoSession.Configuration(profile: candidate.profile, rules: rules)
+                    if previous != next {
+                        exitCheckID = nil
+                        checkingExit = false
+                    }
+                    try await applyLiveConfiguration(session: liveSession, from: previous, to: next) {
+                        try candidate.write(to: storage)
+                    }
+                    if previous != next {
+                        exitIP = nil
+                        updateExit = true
+                    }
+                } else {
+                    try await Task.detached { try candidate.write(to: storage) }.value
+                }
+                profile = candidate.profile
+                profileName = candidate.name
+            } catch {
+                if let failure = error as? SessionError, case .configurationRecoveryUnconfirmed = failure {
+                    exitIP = nil
+                }
+                errorMessage = "导入失败。\(error.localizedDescription)"
+                refresh()
+            }
         }
     }
 
-    func saveRules(direct: String, proxy: String, china: Bool) -> Bool {
-        guard status == .disconnected else { return false }
-        do {
-            let rules = try DomainRules.parse(direct: direct, proxy: proxy, china: china)
-            directDomains = rules.direct.joined(separator: "\n")
-            proxyDomains = rules.proxy.joined(separator: "\n")
-            useChinaIPRules = rules.useChinaIPRules
-            let defaults = UserDefaults.standard
-            defaults.set(directDomains, forKey: "directDomains")
-            defaults.set(proxyDomains, forKey: "proxyDomains")
-            defaults.set(useChinaIPRules, forKey: "useChinaIPRules")
-            errorMessage = nil
-            return true
-        } catch {
-            errorMessage = error.localizedDescription
-            return false
+    func saveRules(direct: String, proxy: String, china: Bool) async throws {
+        guard canEditConfiguration else { throw SessionError.configurationUnavailable }
+        let rules = try DomainRules.parse(direct: direct, proxy: proxy, china: china)
+        configurationChange = .rules
+        errorMessage = nil
+        defer { configurationChange = nil }
+        if status == .connected, mode == .rules {
+            guard let session, let profile else { throw SessionError.configurationUnavailable }
+            let previous = MihomoSession.Configuration(profile: profile, rules: try routingRules(for: mode))
+            let next = MihomoSession.Configuration(profile: profile, rules: rules)
+            try await applyLiveConfiguration(session: session, from: previous, to: next)
         }
+        directDomains = rules.direct.joined(separator: "\n")
+        proxyDomains = rules.proxy.joined(separator: "\n")
+        useChinaIPRules = rules.useChinaIPRules
+        let defaults = UserDefaults.standard
+        defaults.set(directDomains, forKey: "directDomains")
+        defaults.set(proxyDomains, forKey: "proxyDomains")
+        defaults.set(useChinaIPRules, forKey: "useChinaIPRules")
     }
 
     func refresh() {
@@ -182,7 +233,7 @@ final class TunnelStore: ObservableObject {
     }
 
     func toggle() {
-        guard !changingMode else { return }
+        guard configurationChange == nil else { return }
         switch status {
         case .connected: disconnect()
         case .disconnected:
@@ -193,24 +244,31 @@ final class TunnelStore: ObservableObject {
     }
 
     func checkExit() {
-        guard status == .connected, !checkingExit, let session else { return }
+        guard status == .connected, configurationChange == nil, !checkingExit, let session else { return }
+        let id = UUID()
+        exitCheckID = id
         checkingExit = true
         Task {
+            defer {
+                if exitCheckID == id {
+                    exitCheckID = nil
+                    checkingExit = false
+                }
+            }
             do {
                 let ip = try await Task.detached { try session.checkExit() }.value
-                if self.session === session { exitIP = ip }
+                if self.session === session, exitCheckID == id { exitIP = ip }
             } catch {
-                if self.session === session {
+                if self.session === session, exitCheckID == id {
                     exitIP = nil
                     errorMessage = error.localizedDescription
                 }
             }
-            checkingExit = false
         }
     }
 
     func quit() {
-        guard status != .connecting, status != .disconnecting, !changingMode else { return }
+        guard canEditConfiguration else { return }
         if session != nil || systemProxy.hasSavedState() {
             disconnect(quitAfterward: true)
         } else {
@@ -226,35 +284,53 @@ final class TunnelStore: ObservableObject {
     }
 
     func selectMode(_ next: TunnelMode) {
-        guard next != mode, !changingMode else { return }
+        guard next != mode, canEditConfiguration else { return }
         if status == .disconnected {
             mode = next
             refresh()
             return
         }
         guard status == .connected, let session, let profile else { return }
-        let rules: DomainRules
+        let previous: MihomoSession.Configuration
+        let replacement: MihomoSession.Configuration
         do {
-            rules = try routingRules(for: next)
+            previous = .init(profile: profile, rules: try routingRules(for: mode))
+            replacement = .init(profile: profile, rules: try routingRules(for: next))
         } catch {
             errorMessage = error.localizedDescription
             return
         }
-        changingMode = true
+        configurationChange = .mode
         errorMessage = nil
         Task {
-            defer { changingMode = false }
+            defer { configurationChange = nil }
             do {
-                let geoIP = rules.useChinaIPRules ? try await Self.ensureGeoIP(at: storage) : nil
-                guard self.session === session, session.isRunning else { return }
-                try await Task.detached { try session.applyRules(profile: profile, rules: rules, geoIP: geoIP) }.value
-                guard self.session === session, session.isRunning else { return }
+                try await applyLiveConfiguration(session: session, from: previous, to: replacement)
                 mode = next
             } catch {
                 errorMessage = error.localizedDescription
                 refresh()
             }
         }
+    }
+
+    private var canEditConfiguration: Bool {
+        configurationChange == nil && (status == .connected || status == .disconnected)
+    }
+
+    private func applyLiveConfiguration(
+        session: MihomoSession, from previous: MihomoSession.Configuration, to next: MihomoSession.Configuration,
+        commit: @escaping @Sendable () throws -> Void = {}
+    ) async throws {
+        let needsGeoIP = !previous.rules.useChinaIPRules && next.rules.useChinaIPRules
+        let geoIP = needsGeoIP ? try await Self.ensureGeoIP(at: storage) : nil
+        guard self.session === session, session.isRunning else { throw SessionError.configurationUnavailable }
+        try await Task.detached {
+            try session.replaceConfiguration(previous, with: next, geoIP: geoIP) {
+                guard session.isRunning else { throw SessionError.configurationUnavailable }
+                try commit()
+            }
+        }.value
     }
 
     private func routingRules(for mode: TunnelMode) throws -> DomainRules {
@@ -560,7 +636,7 @@ final class TunnelStore: ObservableObject {
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
     }
 
-    private static func privateWrite(_ data: Data, to url: URL) throws {
+    nonisolated fileprivate static func privateWrite(_ data: Data, to url: URL) throws {
         try data.write(to: url, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
@@ -585,6 +661,43 @@ final class TunnelStore: ObservableObject {
         } catch {
             throw SessionError.geoIPUnavailable
         }
+    }
+}
+
+private struct ImportedWireGuardProfile: Sendable {
+    private static let namePrefix = "# TunnelMaster profile name: "
+    let profile: WireGuardProfile
+    let name: String
+    private let contents: String
+
+    init(url: URL) throws {
+        contents = try String(contentsOf: url, encoding: .utf8)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "\u{FEFF}"))
+        profile = try WireGuardProfile.parse(contents)
+        name = url.deletingPathExtension().lastPathComponent
+    }
+
+    func write(to storage: URL) throws {
+        let destination = storage.appendingPathComponent("profile.conf")
+        let staged = storage.appendingPathComponent(".profile-\(UUID().uuidString)")
+        let encodedName = Data(name.utf8).base64EncodedString()
+        // Keep the name and key in one atomic replacement. The header remains a WireGuard comment.
+        let document = Self.namePrefix + encodedName + "\n" + contents
+        defer { try? FileManager.default.removeItem(at: staged) }
+        try TunnelStore.privateWrite(Data(document.utf8), to: staged)
+        guard rename(staged.path, destination.path) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+    }
+
+    static func storedName(in contents: String, storage: URL) -> String {
+        if let header = contents.split(maxSplits: 1, whereSeparator: \.isNewline).first,
+           header.hasPrefix(namePrefix), let data = Data(base64Encoded: String(header.dropFirst(namePrefix.count))),
+           let name = String(data: data, encoding: .utf8), !name.isEmpty {
+            return name
+        }
+        let legacyName = try? String(contentsOf: storage.appendingPathComponent("profile-name.txt"), encoding: .utf8)
+        return legacyName.flatMap { $0.isEmpty ? nil : $0 } ?? "本机配置"
     }
 }
 

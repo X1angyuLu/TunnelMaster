@@ -92,7 +92,7 @@ struct MenuView: View {
                         ProgressView()
                             .controlSize(.small)
                     }
-                    Text(store.needsProxyRecovery && isDisconnected ? "恢复系统代理" : actionTitle)
+                    Text(actionTitle)
                 }
                 .font(.system(.body, weight: .semibold))
                 .frame(maxWidth: .infinity)
@@ -197,7 +197,7 @@ struct MenuView: View {
                     }
                 }
                 .buttonStyle(.borderless)
-                .disabled(!isConnected || store.checkingExit)
+                .disabled(!isConnected || store.checkingExit || isBusy)
                 .help("检测当前出口 IP")
                 .accessibilityLabel("检测当前出口 IP")
             }
@@ -379,12 +379,12 @@ struct MenuView: View {
             Button(action: store.importProfile) {
                 Label("导入配置…", systemImage: "folder")
             }
-            .disabled(!isDisconnected)
+            .disabled(isBusy)
 
             Button(action: openEditor) {
                 Label("编辑规则…", systemImage: "slider.horizontal.3")
             }
-            .disabled(!isDisconnected)
+            .disabled(isBusy)
 
             Spacer(minLength: 0)
 
@@ -407,34 +407,47 @@ struct MenuView: View {
                 Spacer()
                 Button("返回") { editor.isEditing = false }
                     .buttonStyle(.borderless)
+                    .disabled(editor.isSaving)
                 closeButton
+                    .disabled(editor.isSaving)
             }
 
-            Text("每行填写一个域名，规则同时匹配其子域名。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 5) {
+                Text("每行填写一个域名，规则同时匹配其子域名。")
+                if isConnected {
+                    Text(isRulesMode ? "保存后会应用到当前连接。" : "保存的规则会在切换到「规则分流」时生效。")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
 
-            domainEditor("始终直连", example: "bilibili.com", domains: $editor.directDomains)
-            domainEditor("始终走隧道", example: "example.com", domains: $editor.proxyDomains)
+            Group {
+                domainEditor("始终直连", example: "bilibili.com", domains: $editor.directDomains)
+                domainEditor("始终走隧道", example: "example.com", domains: $editor.proxyDomains)
 
-            Toggle("中国大陆 IP 直连", isOn: $editor.chinaIPDirect)
-                .font(.callout)
+                Toggle("中国大陆 IP 直连", isOn: $editor.chinaIPDirect)
+                    .font(.callout)
+            }
+            .disabled(editor.isSaving)
 
-            if editor.showingError, let error = store.errorMessage {
+            if let error = editor.errorMessage {
                 notice(error, symbol: "exclamationmark.circle", color: .orange)
             }
 
             HStack {
+                if editor.isSaving {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("正在保存规则…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Spacer()
                 Button("取消") { editor.isEditing = false }
-                Button("保存") {
-                    if store.saveRules(direct: editor.directDomains, proxy: editor.proxyDomains, china: editor.chinaIPDirect) {
-                        editor.isEditing = false
-                    } else {
-                        editor.showingError = true
-                    }
-                }
-                .buttonStyle(.borderedProminent)
+                    .disabled(editor.isSaving)
+                Button("保存", action: saveEditorRules)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(editor.isSaving || isBusy)
             }
         }
     }
@@ -472,8 +485,25 @@ struct MenuView: View {
         editor.directDomains = store.directDomains
         editor.proxyDomains = store.proxyDomains
         editor.chinaIPDirect = store.useChinaIPRules
-        editor.showingError = false
+        editor.errorMessage = nil
         editor.isEditing = true
+    }
+
+    private func saveEditorRules() {
+        guard !editor.isSaving, !isBusy else { return }
+        editor.isSaving = true
+        editor.errorMessage = nil
+        Task {
+            defer { editor.isSaving = false }
+            do {
+                try await store.saveRules(
+                    direct: editor.directDomains, proxy: editor.proxyDomains, china: editor.chinaIPDirect
+                )
+                editor.isEditing = false
+            } catch {
+                editor.errorMessage = error.localizedDescription
+            }
+        }
     }
 
     private func notice(_ message: String, symbol: String, color: Color = .secondary) -> some View {
@@ -493,7 +523,7 @@ struct MenuView: View {
         return false
     }
 
-    private var isBusy: Bool { store.changingMode || (!isConnected && !isDisconnected) }
+    private var isBusy: Bool { store.configurationChange != nil || (!isConnected && !isDisconnected) }
 
     private var isRulesMode: Bool {
         if case .rules = store.mode { return true }
@@ -522,7 +552,8 @@ struct MenuView: View {
     }
 
     private var actionTitle: String {
-        if store.changingMode { return "正在切换模式…" }
+        if let change = store.configurationChange { return change.title }
+        if store.needsProxyRecovery && isDisconnected { return "恢复系统代理" }
         return switch store.status {
         case .connected: "断开连接"
         case .connecting: "正在连接…"
@@ -576,5 +607,6 @@ private final class RuleEditorState: ObservableObject {
     @Published var directDomains = ""
     @Published var proxyDomains = ""
     @Published var chinaIPDirect = true
-    @Published var showingError = false
+    @Published var isSaving = false
+    @Published var errorMessage: String?
 }

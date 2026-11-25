@@ -9,7 +9,11 @@ enum SessionError: LocalizedError {
     case geoIPUnavailable
     case exitUnavailable
     case metricsUnavailable
-    case ruleReloadFailed
+    case configurationUnavailable
+    case configurationRejected
+    case configurationReloadUnconfirmed
+    case configurationRecoveryUnconfirmed
+    case newProfileUnreachable
     case handoffFailed
 
     var errorDescription: String? {
@@ -20,7 +24,11 @@ enum SessionError: LocalizedError {
         case .geoIPUnavailable: return "无法下载中国大陆 IP 数据。可以关闭 IP 分流后仅用域名规则。"
         case .exitUnavailable: return "未能验证公网出口。"
         case .metricsUnavailable: return "暂时无法读取流量统计。"
-        case .ruleReloadFailed: return "Mihomo 未确认新的分流规则。"
+        case .configurationUnavailable: return "当前 Mihomo 会话不可用，配置未更新。"
+        case .configurationRejected: return "Mihomo 拒绝了新配置。"
+        case .configurationReloadUnconfirmed: return "Mihomo 未确认更新，已请求恢复原配置。"
+        case .configurationRecoveryUnconfirmed: return "Mihomo 未确认恢复原配置，请检查当前连接。"
+        case .newProfileUnreachable: return "新 WireGuard 配置未通过连通性检查，已恢复原配置。"
         case .handoffFailed: return "无法安全接管正在运行的 Mihomo 会话。"
         }
     }
@@ -74,6 +82,11 @@ enum MacCommand {
 }
 
 final class MihomoSession: @unchecked Sendable {
+    struct Configuration: Equatable, Sendable {
+        let profile: WireGuardProfile
+        let rules: DomainRules
+    }
+
     private enum Engine {
         case launched(Process)
         case adopted(AdoptedMihomoProcess)
@@ -204,13 +217,40 @@ final class MihomoSession: @unchecked Sendable {
         return metrics
     }
 
-    func applyRules(profile: WireGuardProfile, rules: DomainRules, geoIP: URL?) throws {
-        guard let metricsSocket = verifiedMetricsSocket else {
-            throw SessionError.ruleReloadFailed
+    func replaceConfiguration(
+        _ previous: Configuration, with next: Configuration, geoIP: URL?, commit: () throws -> Void = {}
+    ) throws {
+        guard previous != next else {
+            try commit()
+            return
         }
-        let configuration = try Self.configuration(
-            profile: profile, rules: rules, port: port, geoIP: geoIP, home: home
-        )
+        guard let metricsSocket = verifiedMetricsSocket else {
+            throw SessionError.configurationUnavailable
+        }
+        let original = try Self.configuration(profile: previous.profile, rules: previous.rules, port: port,
+                                              geoIP: nil, home: home)
+        let replacement = try Self.configuration(profile: next.profile, rules: next.rules, port: port,
+                                                 geoIP: geoIP, home: home)
+        do {
+            try reload(replacement, socket: metricsSocket)
+            if previous.profile != next.profile, !testWireGuard(socket: metricsSocket) {
+                throw SessionError.newProfileUnreachable
+            }
+            try commit()
+        } catch SessionError.configurationRejected {
+            throw SessionError.configurationRejected
+        } catch {
+            do {
+                try reload(original, socket: metricsSocket)
+            } catch {
+                throw SessionError.configurationRecoveryUnconfirmed
+            }
+            throw error
+        }
+    }
+
+    private func reload(_ configuration: Data, socket: URL) throws {
+        guard verifiedMetricsSocket == socket else { throw SessionError.configurationUnavailable }
         let requestBody = try JSONEncoder().encode(["payload": String(decoding: configuration, as: UTF8.self)])
         let input = Pipe()
         let status = Pipe()
@@ -218,8 +258,8 @@ final class MihomoSession: @unchecked Sendable {
         client.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
         // Leaving force off retains the existing proxy listener.
         client.arguments = [
-            "--disable", "--silent", "--fail", "--connect-timeout", "1", "--max-time", "6",
-            "--noproxy", "*", "--unix-socket", metricsSocket.path,
+            "--disable", "--silent", "--connect-timeout", "1", "--max-time", "20",
+            "--noproxy", "*", "--unix-socket", socket.path,
             "--request", "PUT", "--header", "Content-Type: application/json",
             "--data-binary", "@-", "--output", "/dev/null", "--write-out", "%{http_code}",
             "http://localhost/configs",
@@ -232,12 +272,12 @@ final class MihomoSession: @unchecked Sendable {
         let writer = input.fileHandleForWriting
         // If curl exits early, a broken pipe must fail the request without terminating the app.
         guard fcntl(writer.fileDescriptor, F_SETNOSIGPIPE, 1) != -1 else {
-            throw SessionError.ruleReloadFailed
+            throw SessionError.configurationReloadUnconfirmed
         }
         do {
             try client.run()
         } catch {
-            throw SessionError.ruleReloadFailed
+            throw SessionError.configurationReloadUnconfirmed
         }
         do {
             try writer.write(contentsOf: requestBody)
@@ -246,13 +286,30 @@ final class MihomoSession: @unchecked Sendable {
             try? writer.close()
             if client.isRunning { client.terminate() }
             client.waitUntilExit()
-            throw SessionError.ruleReloadFailed
+            throw SessionError.configurationReloadUnconfirmed
         }
         let response = status.fileHandleForReading.readDataToEndOfFile()
         client.waitUntilExit()
-        guard client.terminationStatus == 0, String(decoding: response, as: UTF8.self) == "204" else {
-            throw SessionError.ruleReloadFailed
+        guard client.terminationStatus == 0 else { throw SessionError.configurationReloadUnconfirmed }
+        switch String(decoding: response, as: UTF8.self) {
+        case "204": return
+        case "400": throw SessionError.configurationRejected
+        default: throw SessionError.configurationReloadUnconfirmed
         }
+    }
+
+    private func testWireGuard(socket: URL) -> Bool {
+        // Target the WireGuard adapter explicitly so a user-defined direct rule can't pass the check.
+        let result = try? MacCommand.capture("/usr/bin/curl", arguments: [
+            "--disable", "--silent", "--fail", "--max-time", "8", "--max-filesize", "4096",
+            "--noproxy", "*", "--unix-socket", socket.path,
+            "http://localhost/proxies/WireGuard/delay?timeout=6000&expected=200&url=https%3A%2F%2Fwww.cloudflare.com%2Fcdn-cgi%2Ftrace",
+        ])
+        guard let result, result.status == 0,
+              let delay = try? JSONDecoder().decode([String: Int].self, from: Data(result.output.utf8))["delay"] else {
+            return false
+        }
+        return delay > 0
     }
 
     private var verifiedMetricsSocket: URL? {

@@ -1,7 +1,7 @@
 import Darwin
 import Foundation
 
-public struct WireGuardProfile: Sendable {
+public struct WireGuardProfile: Equatable, Sendable {
     public let endpointHost: String
     public let endpointPort: Int
 

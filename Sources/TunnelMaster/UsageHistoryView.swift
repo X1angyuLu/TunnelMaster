@@ -25,6 +25,14 @@ struct UsageHistoryView: View {
         }
         .frame(minWidth: 760, minHeight: 610)
         .background(Color(nsColor: .windowBackgroundColor))
+        .handlesExternalEvents(preferring: ["tunnelmaster://statistics"], allowing: ["tunnelmaster://statistics"])
+        .onOpenURL { url in
+            guard url.scheme == "tunnelmaster", url.host == "statistics" else { return }
+            if url.path == "/digitalocean" {
+                sourcePreference = HistoryDataSource.digitalOcean.rawValue
+            }
+            NSApp.activate(ignoringOtherApps: true)
+        }
     }
 
     private var localHistory: some View {

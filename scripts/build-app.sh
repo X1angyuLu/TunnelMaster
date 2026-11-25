@@ -22,6 +22,12 @@ cat > "$bundle/Contents/Info.plist" <<'PLIST'
     <key>CFBundleDisplayName</key><string>TunnelMaster</string>
     <key>CFBundleExecutable</key><string>TunnelMaster</string>
     <key>CFBundleIdentifier</key><string>com.x1angyulu.TunnelMaster</string>
+    <key>CFBundleURLTypes</key>
+    <array><dict>
+        <key>CFBundleTypeRole</key><string>Viewer</string>
+        <key>CFBundleURLName</key><string>com.x1angyulu.TunnelMaster.statistics</string>
+        <key>CFBundleURLSchemes</key><array><string>tunnelmaster</string></array>
+    </dict></array>
     <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>0.1.0</string>

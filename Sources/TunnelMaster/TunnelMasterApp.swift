@@ -29,6 +29,7 @@ struct TunnelMasterApp: App {
         Window("流量历史", id: "traffic-history") {
             UsageHistoryView(store: store)
         }
+        .handlesExternalEvents(matching: ["tunnelmaster://statistics"])
         .defaultSize(width: 960, height: 780)
         .commands {
             CommandGroup(replacing: .appTermination) {

@@ -33,6 +33,8 @@
 
 「流量统计」里的 DigitalOcean 来源读取指定 Droplet 的公网入站和出站速率，同一台服务器上各设备的流量都会计入。连接时输入 Droplet ID 和只勾选 `monitoring:read` 的 DigitalOcean API 令牌，令牌保存在当前 Mac 的钥匙串。图表直接使用 [Monitoring API](https://docs.digitalocean.com/reference/api/reference/monitoring/#get-droplet-bandwidth-metrics) 返回的采样，进出站用量按已覆盖的时段估算。结算用量和团队流量池在 [DigitalOcean Billing](https://cloud.digitalocean.com/account/billing) 查看。
 
+安装应用后，也可以用 `open 'tunnelmaster://statistics/digitalocean'` 打开 DigitalOcean 统计页。
+
 如果程序异常结束，重新打开应用并选择「恢复系统代理」。遇到其他代理应用在会话中修改设置时，TunnelMaster 会保留它修改的代理组。
 
 从源码更新时，构建后运行 `python3 scripts/install-update.py`。安装程序会先验证新版能接管当前 Mihomo，再退出现有界面。当前版本的控制套接字、系统代理或 HTTPS 检查失败时，安装程序会中止交接。

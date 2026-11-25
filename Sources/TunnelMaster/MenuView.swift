@@ -14,20 +14,33 @@ struct MenuView: View {
             }
         }
         .padding(16)
-        .frame(width: 350)
+        .frame(width: 370)
         .onAppear { store.refresh() }
     }
 
     private var overview: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
             header
+            TrafficDashboard(
+                isConnected: isConnected,
+                connectedAt: store.connectedAt,
+                traffic: store.traffic,
+                history: store.trafficHistory
+            )
             connectionCard
             modePicker
 
             VStack(alignment: .leading, spacing: 6) {
-                Text(routingFootnote)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    Text("适用于遵循系统代理的应用")
+                    Spacer(minLength: 0)
+                    if isRulesMode && store.useChinaIPRules {
+                        Label("大陆 IP 直连", systemImage: "checkmark.circle")
+                            .accessibilityLabel("中国大陆 IP 直连已开启")
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
                 if store.needsProxyRecovery {
                     notice("之前的代理会话已停止。请先恢复系统代理。", symbol: "arrow.uturn.backward", color: .orange)
@@ -66,11 +79,13 @@ struct MenuView: View {
             Divider()
             footer
         }
+        .onAppear { store.setMetricsVisible(true) }
+        .onDisappear { store.setMetricsVisible(false) }
     }
 
     private var header: some View {
         HStack(spacing: 10) {
-            Image(systemName: "network")
+            Image(systemName: "globe")
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(Color.accentColor)
                 .frame(width: 32, height: 32)
@@ -299,14 +314,6 @@ struct MenuView: View {
 
     private var connectionUnavailable: Bool {
         !store.hasRuleEngine || store.profileName == nil || store.observedFullTunnel
-    }
-
-    private var routingFootnote: String {
-        if isRulesMode {
-            "遵循 macOS 系统代理的应用按规则分流。"
-        } else {
-            "遵循 macOS 系统代理的应用经隧道联网。"
-        }
     }
 
     private var statusColor: Color {

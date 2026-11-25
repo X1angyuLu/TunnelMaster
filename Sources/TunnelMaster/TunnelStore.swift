@@ -16,6 +16,22 @@ enum ConnectionStatus {
     case disconnecting
 }
 
+struct TrafficSnapshot {
+    let downloadRate: Double?
+    let uploadRate: Double?
+    let downloadTotal: Int64
+    let uploadTotal: Int64
+    let connectionCount: Int
+}
+
+struct TrafficSample: Identifiable {
+    let timestamp: Date
+    let downloadRate: Double
+    let uploadRate: Double
+
+    var id: Date { timestamp }
+}
+
 @MainActor
 final class TunnelStore: ObservableObject {
     @Published var mode: TunnelMode {
@@ -33,12 +49,18 @@ final class TunnelStore: ObservableObject {
     @Published private(set) var hasRuleEngine = MihomoSession.executable != nil
     @Published private(set) var needsProxyRecovery = false
     @Published private(set) var changedNetwork = false
+    @Published private(set) var connectedAt: Date?
+    @Published private(set) var traffic: TrafficSnapshot?
+    @Published private(set) var trafficHistory: [TrafficSample] = []
 
     private let storage: URL
     private let systemProxy: SystemProxyController
     private var profile: WireGuardProfile?
     private var session: MihomoSession?
     private var monitor: Timer?
+    private var metricsTask: Task<Void, Never>?
+    private var metricsVisible = false
+    private var lastReading: (metrics: MihomoMetrics, instant: ContinuousClock.Instant)?
 
     init() {
         let defaults = UserDefaults.standard
@@ -131,6 +153,7 @@ final class TunnelStore: ObservableObject {
         guard status != .connecting, status != .disconnecting else { return }
         if let session, !session.isRunning {
             self.session = nil
+            clearMetrics()
             status = .disconnected
             exitIP = nil
             errorMessage = "Mihomo 已停止。请恢复之前的系统代理设置。"
@@ -181,6 +204,71 @@ final class TunnelStore: ObservableObject {
         }
     }
 
+    func setMetricsVisible(_ visible: Bool) {
+        metricsVisible = visible
+    }
+
+    private func activateSession(_ session: MihomoSession) {
+        self.session = session
+        connectedAt = Date()
+        status = .connected
+        metricsTask = Task { [weak self] in
+            while !Task.isCancelled {
+                let reading = await Task.detached(priority: .utility) { try? session.readMetrics() }.value
+                guard !Task.isCancelled, self?.session === session else { return }
+                self?.updateMetrics(reading)
+                do {
+                    try await Task.sleep(for: .seconds(self?.metricsVisible == true ? 2 : 5))
+                } catch {
+                    return
+                }
+            }
+        }
+    }
+
+    private func updateMetrics(_ reading: MihomoMetrics?) {
+        let now = Date()
+        var history = trafficHistory.filter { now.timeIntervalSince($0.timestamp) <= 60 }
+        guard let reading else {
+            lastReading = nil
+            traffic = nil
+            trafficHistory = history
+            return
+        }
+
+        let instant = ContinuousClock.now
+        var downloadRate: Double?
+        var uploadRate: Double?
+        if let previous = lastReading {
+            let elapsed = previous.instant.duration(to: instant).components
+            let seconds = Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18
+            if reading.downloadTotal < previous.metrics.downloadTotal || reading.uploadTotal < previous.metrics.uploadTotal {
+                history.removeAll()
+            } else if seconds > 0 {
+                let down = Double(reading.downloadTotal - previous.metrics.downloadTotal) / seconds
+                let up = Double(reading.uploadTotal - previous.metrics.uploadTotal) / seconds
+                downloadRate = down
+                uploadRate = up
+                history.append(TrafficSample(timestamp: now, downloadRate: down, uploadRate: up))
+            }
+        }
+        lastReading = (reading, instant)
+        trafficHistory = history
+        traffic = TrafficSnapshot(
+            downloadRate: downloadRate, uploadRate: uploadRate,
+            downloadTotal: reading.downloadTotal, uploadTotal: reading.uploadTotal, connectionCount: reading.connectionCount
+        )
+    }
+
+    private func clearMetrics() {
+        metricsTask?.cancel()
+        metricsTask = nil
+        lastReading = nil
+        connectedAt = nil
+        traffic = nil
+        trafficHistory = []
+    }
+
     private func connect() {
         guard let profile, let executable = MihomoSession.executable else {
             errorMessage = "连接需要本机 WireGuard 配置和 Mihomo。"
@@ -219,14 +307,12 @@ final class TunnelStore: ObservableObject {
                 }.value
                 pendingSession = next
                 try await Task.detached { try systemProxy.enable(port: next.port) }.value
-                session = next
-                status = .connected
+                activateSession(next)
                 checkExit()
             } catch {
                 if let pendingSession {
                     if systemProxy.hasSavedState() && pendingSession.isRunning {
-                        session = pendingSession
-                        status = .connected
+                        activateSession(pendingSession)
                         errorMessage = "系统代理未完整应用。请先断开以恢复设置。\(error.localizedDescription)"
                         return
                     }
@@ -247,6 +333,7 @@ final class TunnelStore: ObservableObject {
             do {
                 try await Task.detached { try systemProxy.disable() }.value
                 session = nil
+                clearMetrics()
                 if let runningSession {
                     await Task.detached { runningSession.stop() }.value
                 }

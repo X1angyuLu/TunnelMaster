@@ -8,6 +8,7 @@ enum SessionError: LocalizedError {
     case engineDidNotStart
     case geoIPUnavailable
     case exitUnavailable
+    case metricsUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -16,7 +17,30 @@ enum SessionError: LocalizedError {
         case .engineDidNotStart: return "Mihomo 未能启动本机代理。"
         case .geoIPUnavailable: return "无法下载中国大陆 IP 数据。可以关闭 IP 分流后仅用域名规则。"
         case .exitUnavailable: return "未能验证公网出口。"
+        case .metricsUnavailable: return "暂时无法读取流量统计。"
         }
+    }
+}
+
+struct MihomoMetrics: Sendable {
+    let downloadTotal: Int64
+    let uploadTotal: Int64
+    let connectionCount: Int
+}
+
+extension MihomoMetrics: Decodable {
+    private enum CodingKeys: String, CodingKey {
+        case downloadTotal, uploadTotal, connections
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        downloadTotal = try values.decode(Int64.self, forKey: .downloadTotal)
+        uploadTotal = try values.decode(Int64.self, forKey: .uploadTotal)
+        // Mihomo returns null with no active connections. Count entries without decoding their metadata.
+        connectionCount = try values.decodeNil(forKey: .connections)
+            ? 0
+            : values.nestedUnkeyedContainer(forKey: .connections).count ?? 0
     }
 }
 
@@ -48,14 +72,16 @@ enum MacCommand {
 final class MihomoSession: @unchecked Sendable {
     private let process: Process
     private let home: URL
+    private let metricsSocket: URL?
     let port: Int
 
     var isRunning: Bool { process.isRunning }
 
-    private init(process: Process, home: URL, port: Int) {
+    private init(process: Process, home: URL, port: Int, metricsSocket: URL?) {
         self.process = process
         self.home = home
         self.port = port
+        self.metricsSocket = metricsSocket
     }
 
     static var executable: String? {
@@ -75,6 +101,7 @@ final class MihomoSession: @unchecked Sendable {
         let home = workDirectory.appendingPathComponent("mihomo-\(UUID().uuidString)", isDirectory: true)
         try fileManager.createDirectory(at: home, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         let config = home.appendingPathComponent("config.json")
+        let metricsSocket = makeMetricsSocketPath()
         var startedProcess: Process?
 
         do {
@@ -97,7 +124,7 @@ final class MihomoSession: @unchecked Sendable {
             validator.waitUntilExit()
             guard validator.terminationStatus == 0 else { throw SessionError.invalidEngineConfiguration }
 
-            let process = engine(executable, arguments: arguments, home: home)
+            let process = engine(executable, arguments: arguments, home: home, metricsSocket: metricsSocket)
             try process.run()
             startedProcess = process
             for _ in 0..<24 where process.isRunning {
@@ -105,14 +132,18 @@ final class MihomoSession: @unchecked Sendable {
                    process.isRunning {
                     // Mihomo has loaded the configuration; avoid retaining a second private-key copy.
                     try fileManager.removeItem(at: config)
-                    return MihomoSession(process: process, home: home, port: port)
+                    return MihomoSession(process: process, home: home, port: port, metricsSocket: metricsSocket)
                 }
                 Thread.sleep(forTimeInterval: 0.15)
             }
             throw SessionError.engineDidNotStart
         } catch {
-            if let startedProcess, startedProcess.isRunning { startedProcess.terminate() }
+            if let startedProcess, startedProcess.isRunning {
+                startedProcess.terminate()
+                startedProcess.waitUntilExit()
+            }
             try? fileManager.removeItem(at: home)
+            Self.removeMetricsSocketDirectory(for: metricsSocket)
             throw error
         }
     }
@@ -123,6 +154,21 @@ final class MihomoSession: @unchecked Sendable {
             process.waitUntilExit()
         }
         try? FileManager.default.removeItem(at: home)
+        Self.removeMetricsSocketDirectory(for: metricsSocket)
+    }
+
+    func readMetrics() throws -> MihomoMetrics {
+        guard isRunning, let metricsSocket, FileManager.default.fileExists(atPath: metricsSocket.path) else {
+            throw SessionError.metricsUnavailable
+        }
+        let result = try MacCommand.capture("/usr/bin/curl", arguments: [
+            "--disable", "--silent", "--fail", "--max-time", "2", "--max-filesize", "8388608",
+            "--noproxy", "*", "--unix-socket", metricsSocket.path, "http://localhost/connections",
+        ])
+        guard result.status == 0 else { throw SessionError.metricsUnavailable }
+        let metrics = try JSONDecoder().decode(MihomoMetrics.self, from: Data(result.output.utf8))
+        guard metrics.downloadTotal >= 0, metrics.uploadTotal >= 0 else { throw SessionError.metricsUnavailable }
+        return metrics
     }
 
     func checkExit() throws -> String {
@@ -143,16 +189,34 @@ final class MihomoSession: @unchecked Sendable {
         return ip
     }
 
-    private static func engine(_ executable: String, arguments: [String], home: URL) -> Process {
+    private static func engine(_ executable: String, arguments: [String], home: URL, metricsSocket: URL? = nil) -> Process {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
         // Mihomo accepts environment-based configuration overrides; do not inherit them.
-        process.environment = ["PATH": "/usr/bin:/bin", "HOME": home.path]
+        var environment = ["PATH": "/usr/bin:/bin", "HOME": home.path]
+        if let metricsSocket {
+            environment["CLASH_OVERRIDE_EXTERNAL_CONTROLLER_UNIX"] = metricsSocket.path
+        }
+        process.environment = environment
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         return process
+    }
+
+    private static func makeMetricsSocketPath() -> URL? {
+        // Use a short path for sockaddr_un. The atomically created 0700 directory protects the local API.
+        var template = Array("/tmp/tunnelmaster-XXXXXX".utf8CString)
+        return template.withUnsafeMutableBufferPointer { bytes in
+            guard let base = bytes.baseAddress, let path = mkdtemp(base) else { return nil }
+            return URL(fileURLWithPath: String(cString: path), isDirectory: true).appendingPathComponent("metrics.sock")
+        }
+    }
+
+    private static func removeMetricsSocketDirectory(for socket: URL?) {
+        guard let directory = socket?.deletingLastPathComponent() else { return }
+        try? FileManager.default.removeItem(at: directory)
     }
 
     private static func localPort() throws -> Int {

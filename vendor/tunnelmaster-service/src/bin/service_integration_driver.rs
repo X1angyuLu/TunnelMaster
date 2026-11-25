@@ -20,7 +20,7 @@ const IPC_PROBE_INTERVAL: Duration = Duration::from_millis(250);
 async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        eprintln!("usage: service-integration-driver <probe|ready|ping|start|stop>");
+        eprintln!("usage: service-integration-driver <probe|ready|ping|start|start-runtime|stop>");
         std::process::exit(1);
     }
 
@@ -28,10 +28,14 @@ async fn main() -> anyhow::Result<()> {
         "probe" => probe_protocol().await?,
         "ready" => wait_protocol_ready().await?,
         "ping" => wait_ipc_ready().await?,
-        "start" => start_flow().await?,
+        "start" => start_flow("mode: rule\n".to_owned(), mock_binary_path()?).await?,
+        "start-runtime" if args.len() == 4 => {
+            let yaml = std::fs::read_to_string(&args[2]).context("reading supplied integration YAML")?;
+            start_flow(yaml, args[3].clone()).await?;
+        }
         "stop" => stop_flow().await?,
         _ => {
-            eprintln!("usage: service-integration-driver <probe|ready|ping|start|stop>");
+            eprintln!("usage: service-integration-driver <probe|ready|ping|start|start-runtime|stop>");
             std::process::exit(1);
         }
     }
@@ -92,13 +96,13 @@ async fn wait_protocol_ready() -> anyhow::Result<()> {
     result
 }
 
-async fn start_flow() -> anyhow::Result<()> {
+async fn start_flow(yaml: String, core_path: String) -> anyhow::Result<()> {
     wait_ipc_ready().await?;
     let config = RuntimeBundle {
-        yaml: "mode: rule\n".to_string(),
+        yaml,
         assets: vec![],
         remote_providers: Vec::new(),
-        core_path: mock_binary_path()?,
+        core_path,
     };
     let response = start_clash(
         &owner_credentials()?,

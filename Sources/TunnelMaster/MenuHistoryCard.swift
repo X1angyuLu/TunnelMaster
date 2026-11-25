@@ -254,6 +254,8 @@ final class MenuChartSelection: ObservableObject {
 
 @MainActor
 struct MenuChartInteraction: View {
+    @Environment(\.menuChartDetailController) private var detailController
+    @Environment(\.menuChartDetailContext) private var detailContext
     let chart: ChartProxy
     let selection: MenuChartSelection
     let pick: (Date) -> Date?
@@ -265,8 +267,15 @@ struct MenuChartInteraction: View {
                 .fill(.clear)
                 .contentShape(Rectangle())
                 .background {
-                    MenuChartPointer { point in
-                        selection.hover(point.flatMap { selectedDate(at: $0, inside: frame) })
+                    MenuChartPointer(register: { view in detailController?.registerPointerView(view) }) { point, anchor in
+                        let date = point.flatMap { selectedDate(at: $0, inside: frame) }
+                        selection.hover(date)
+                        if let detailContext {
+                            detailController?.pointerChanged(
+                                anchor: anchor, context: detailContext,
+                                isOverPlot: point.map(frame.contains) ?? false, selectedDate: date
+                            )
+                        }
                     }
                 }
                 .gesture(SpatialTapGesture().onEnded { tap in

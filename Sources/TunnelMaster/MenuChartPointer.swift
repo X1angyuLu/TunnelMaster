@@ -4,16 +4,19 @@ import SwiftUI
 /// Receives pointer movement in the menu's panel even when the panel isn't key.
 /// Hit testing stays with the SwiftUI chart controls underneath.
 struct MenuChartPointer: NSViewRepresentable {
-    let onMove: (CGPoint?) -> Void
+    var register: ((TrackingView) -> Void)?
+    let onMove: (CGPoint?, NSView) -> Void
 
     func makeNSView(context: Context) -> TrackingView {
         let view = TrackingView()
         view.onMove = onMove
+        register?(view)
         return view
     }
 
     func updateNSView(_ view: TrackingView, context: Context) {
         view.onMove = onMove
+        register?(view)
     }
 
     static func dismantleNSView(_ view: TrackingView, coordinator: ()) {
@@ -21,8 +24,9 @@ struct MenuChartPointer: NSViewRepresentable {
     }
 
     final class TrackingView: NSView {
-        var onMove: ((CGPoint?) -> Void)?
+        var onMove: ((CGPoint?, NSView) -> Void)?
         private var pointerArea: NSTrackingArea?
+        private var lastPoint: CGPoint?
 
         override var isFlipped: Bool { true }
 
@@ -47,10 +51,26 @@ struct MenuChartPointer: NSViewRepresentable {
         override func mouseEntered(with event: NSEvent) { mouseMoved(with: event) }
 
         override func mouseMoved(with event: NSEvent) {
-            let point = convert(event.locationInWindow, from: nil)
-            onMove?(bounds.contains(point) ? point : nil)
+            report(convert(event.locationInWindow, from: nil))
         }
 
-        override func mouseExited(with event: NSEvent) { onMove?(nil) }
+        override func mouseExited(with event: NSEvent) { clearPointer() }
+
+        func samplePointer() {
+            guard let window, window.isVisible, !isHiddenOrHasHiddenAncestor else {
+                clearPointer()
+                return
+            }
+            report(convert(window.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil))
+        }
+
+        func clearPointer() { report(nil) }
+
+        private func report(_ point: CGPoint?) {
+            let visiblePoint = point.flatMap { visibleRect.contains($0) ? $0 : nil }
+            guard visiblePoint != lastPoint else { return }
+            lastPoint = visiblePoint
+            onMove?(visiblePoint, self)
+        }
     }
 }

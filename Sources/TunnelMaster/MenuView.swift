@@ -11,11 +11,20 @@ struct MenuView: View {
     @StateObject private var metricsView = MenuMetricsState()
     @StateObject private var menuStats = MenuTrafficLoader()
     private let openHistory: @MainActor () -> Void
+    private let detailController: MenuChartDetailController
+    private let openChartDetail: @MainActor (MenuChartDetailContext) -> Void
 
-    init(store: TunnelStore, openHistory: @escaping @MainActor () -> Void) {
+    init(
+        store: TunnelStore,
+        openHistory: @escaping @MainActor () -> Void,
+        detailController: MenuChartDetailController,
+        openChartDetail: @escaping @MainActor (MenuChartDetailContext) -> Void
+    ) {
         self.store = store
         _serverSource = ObservedObject(wrappedValue: store.digitalOcean)
         self.openHistory = openHistory
+        self.detailController = detailController
+        self.openChartDetail = openChartDetail
     }
 
     var body: some View {
@@ -38,6 +47,8 @@ struct MenuView: View {
             connectionCard
             metricsToolbar
             metricsCard
+                .environment(\.menuChartDetailController, detailController)
+                .environment(\.menuChartDetailContext, detailContext)
             modePicker
 
             VStack(alignment: .leading, spacing: 6) {
@@ -91,7 +102,11 @@ struct MenuView: View {
         }
         .onAppear { store.setMetricsVisible(activeTab == .live) }
         .onChange(of: activeTab) { store.setMetricsVisible($0 == .live) }
-        .onDisappear { store.setMetricsVisible(false) }
+        .onChange(of: detailContext) { _ in detailController.dismiss() }
+        .onDisappear {
+            store.setMetricsVisible(false)
+            detailController.dismiss()
+        }
         .task(id: request) { await loadMetrics(request) }
     }
 
@@ -196,7 +211,7 @@ struct MenuView: View {
                     .padding(.trailing, 2)
             } else {
                 HStack(spacing: 1) {
-                    ForEach(MenuTrafficRange.allCases) { range in
+                    ForEach([MenuTrafficRange.day, .week]) { range in
                         statsButton(range.title, selected: selectedRange == range) { selectedRange = range }
                     }
                 }
@@ -218,6 +233,15 @@ struct MenuView: View {
                     .accessibilityLabel("刷新服务器流量")
                 }
             }
+            Button {
+                openChartDetail(detailContext)
+            } label: {
+                Image(systemName: "chart.xyaxis.line").frame(width: 18, height: 22)
+            }
+            .buttonStyle(.borderless)
+            .font(.caption.weight(.medium))
+            .help("在菜单侧边查看详细图表")
+            .accessibilityLabel("展开图表明细")
         }
         .frame(height: 29)
     }
@@ -263,6 +287,15 @@ struct MenuView: View {
 
     private var activeTab: MenuMetricsTab {
         availableTabs.contains(selectedTab) ? selectedTab : .live
+    }
+
+    private var detailContext: MenuChartDetailContext {
+        let source: MenuChartDetailSource = switch activeTab {
+        case .live: .live
+        case .local: .local
+        case .server: .server
+        }
+        return MenuChartDetailContext(source: source, range: selectedRange)
     }
 
     private var metricsRequest: MenuMetricsRequest {

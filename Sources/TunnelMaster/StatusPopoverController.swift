@@ -12,7 +12,17 @@ final class StatusPopoverController: NSObject, NSPopoverDelegate {
     private let store: TunnelStore
     private let statusItem: NSStatusItem
     private let popover = NSPopover()
-    private let hosting: NSHostingController<MenuView>
+    private let detailController: MenuChartDetailController
+    private let openHistory: @MainActor () -> Void
+    private lazy var hosting: NSHostingController<MenuView> = NSHostingController(rootView: MenuView(
+        store: store,
+        openHistory: { [weak self] in
+            self?.detailController.dismiss()
+            self?.openHistory()
+        },
+        detailController: detailController,
+        openChartDetail: { [weak self] context in self?.showChartDetail(context) }
+    ))
     private var statusObservation: AnyCancellable?
     private var buttonTracking: NSTrackingArea?
     private var panelTracking: NSTrackingArea?
@@ -23,14 +33,16 @@ final class StatusPopoverController: NSObject, NSPopoverDelegate {
 
     init(store: TunnelStore, openHistory: @escaping @MainActor () -> Void) {
         self.store = store
+        self.openHistory = openHistory
+        detailController = MenuChartDetailController(store: store)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        hosting = NSHostingController(rootView: MenuView(store: store, openHistory: openHistory))
         super.init()
 
         hosting.sizingOptions = [.preferredContentSize]
         popover.contentViewController = hosting
         popover.behavior = .transient
         popover.delegate = self
+        detailController.onPointerLeft = { [weak self] in self?.scheduleDismissal() }
 
         if let button = statusItem.button {
             button.target = self
@@ -48,6 +60,10 @@ final class StatusPopoverController: NSObject, NSPopoverDelegate {
 
     func showPinned() {
         show(.pinned)
+    }
+
+    private func showChartDetail(_ context: MenuChartDetailContext) {
+        detailController.open(anchor: hosting.view, context: context, selectedDate: nil)
     }
 
     @objc private func togglePopover(_ sender: NSStatusBarButton) {
@@ -104,13 +120,18 @@ final class StatusPopoverController: NSObject, NSPopoverDelegate {
         } else if event.trackingArea !== panelTracking {
             return
         }
+        scheduleDismissal()
+    }
+
+    private func scheduleDismissal() {
         guard presentation == .preview, dismissalTask == nil else { return }
 
         dismissalTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 300_000_000)
+            try? await Task.sleep(nanoseconds: 430_000_000)
             guard let self, !Task.isCancelled else { return }
             dismissalTask = nil
-            if presentation == .preview, !containsPointer(statusItem.button), !containsPointer(panelTrackingView) {
+            if presentation == .preview, !containsPointer(statusItem.button), !containsPointer(panelTrackingView),
+               !detailController.isPointerInside {
                 popover.close()
             }
         }
@@ -135,7 +156,7 @@ final class StatusPopoverController: NSObject, NSPopoverDelegate {
     func popoverShouldClose(_ popover: NSPopover) -> Bool {
         // The anchor's own action decides whether to pin the preview or close it.
         guard let type = NSApp.currentEvent?.type, type == .leftMouseDown || type == .leftMouseUp else { return true }
-        return !containsPointer(statusItem.button)
+        return !containsPointer(statusItem.button) && !containsPointer(panelTrackingView) && !detailController.isPointerInside
     }
 
     func popoverDidShow(_ notification: Notification) {
@@ -144,15 +165,18 @@ final class StatusPopoverController: NSObject, NSPopoverDelegate {
         view.addTrackingArea(area)
         panelTracking = area
         panelTrackingView = view
+        detailController.startPointerSampling()
     }
 
     func popoverDidClose(_ notification: Notification) {
         cancelPreview()
         cancelDismissal()
+        presentation = nil
+        detailController.stopPointerSampling()
+        detailController.dismiss()
         if let area = panelTracking { panelTrackingView?.removeTrackingArea(area) }
         panelTracking = nil
         panelTrackingView = nil
-        presentation = nil
         store.setMetricsVisible(false)
     }
 

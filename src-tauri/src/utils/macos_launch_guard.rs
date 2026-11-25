@@ -239,6 +239,10 @@ fn move_and_relaunch(bundle: &Path, home: &Path) -> LaunchDisposition {
     };
     let destination = destination_root.join(bundle_name);
     let exists = destination.exists();
+    if exists && !belongs_to_tunnelmaster(&destination) {
+        show_message("A different application already uses this location. Existing TunnelMaster installation kept.");
+        return LaunchDisposition::Exit;
+    }
     let destination_display = destination.display().to_string();
     let prompt = if exists {
         clash_verge_i18n::t!("launchGuard.replacePrompt").replace("{destination}", &destination_display)
@@ -265,6 +269,11 @@ fn move_and_relaunch(bundle: &Path, home: &Path) -> LaunchDisposition {
     if !copy.is_ok_and(|status| status.success()) {
         let _ = remove_existing_target(&staging);
         show_message(&clash_verge_i18n::t!("launchGuard.moveFailed"));
+        return LaunchDisposition::Exit;
+    }
+    if destination.exists() && !belongs_to_tunnelmaster(&destination) {
+        let _ = remove_existing_target(&staging);
+        show_message("A different application already uses this location. Existing TunnelMaster installation kept.");
         return LaunchDisposition::Exit;
     }
     let backup = match activate_staged_bundle(&staging, &destination, &backup) {
@@ -301,11 +310,22 @@ fn move_and_relaunch(bundle: &Path, home: &Path) -> LaunchDisposition {
     LaunchDisposition::Exit
 }
 
+fn belongs_to_tunnelmaster(bundle: &Path) -> bool {
+    let property_list = bundle.join("Contents/Info.plist");
+    std::process::Command::new("/usr/bin/plutil")
+        .args(["-extract", "CFBundleIdentifier", "raw", "-o", "-"])
+        .arg(property_list)
+        .output()
+        .is_ok_and(|output| {
+            output.status.success() && String::from_utf8_lossy(&output.stdout).trim() == crate::utils::dirs::APP_ID
+        })
+}
+
 fn sibling_swap_path(destination: &Path, label: &str) -> PathBuf {
     let name = destination
         .file_name()
         .and_then(|name| name.to_str())
-        .unwrap_or("Clash Verge.app");
+        .unwrap_or("TunnelMaster.app");
     destination.with_file_name(format!(".{name}.{label}-{}", std::process::id()))
 }
 
@@ -427,7 +447,7 @@ mod tests {
     #[test]
     fn failed_staged_activation_preserves_existing_application() -> anyhow::Result<()> {
         let root = std::env::temp_dir().join(format!("launch-guard-swap-{}", std::process::id()));
-        let destination = root.join("Clash Verge.app");
+        let destination = root.join("TunnelMaster.app");
         let staging = root.join(".Clash Verge.app.installing");
         let backup = root.join(".Clash Verge.app.backup");
         std::fs::create_dir_all(&destination)?;
@@ -456,9 +476,9 @@ mod tests {
         let system = root.join("Applications");
         let downloads = home.join("Downloads");
         std::fs::create_dir_all(&downloads)?;
-        let allowed_bundle = system.join("Clash Verge.app");
+        let allowed_bundle = system.join("TunnelMaster.app");
         let allowed_exe = executable(&allowed_bundle)?;
-        let link_in = downloads.join("Clash Verge.app");
+        let link_in = downloads.join("TunnelMaster.app");
         symlink(&allowed_bundle, &link_in)?;
         let escaped_bundle = downloads.join("Escaped.app");
         executable(&escaped_bundle)?;

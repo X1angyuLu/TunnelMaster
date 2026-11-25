@@ -13,7 +13,7 @@ use tokio::sync::Mutex;
 const DNS_STATE_FILE: &str = ".original_dns.txt";
 const DNS_BACKUP_DIR: &str = ".original_dns";
 // Any address routed into TUN works, since dns-hijack answers it; the value only matters if left behind.
-const PLACEHOLDER_DNS: &str = "114.114.114.114";
+const PLACEHOLDER_DNS: &str = "192.0.2.53";
 // Scripts run under lifecycle_lock, and networksetup waits for other preference writers without a limit.
 pub(crate) const DNS_SCRIPT_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -65,11 +65,29 @@ pub async fn sync_public_dns() {
     }
     let core_running = !matches!(*CoreManager::global().get_running_mode(), RunningMode::NotRunning);
     let runtime = Config::runtime().await.latest_arc();
-    if core_running && runtime.config.as_ref().is_some_and(needs_public_dns) {
+    if core_running && runtime.config.as_ref().is_some_and(needs_public_dns) && tun_handles_placeholder().await {
         set_public_dns().await;
     } else {
         let _ = unset_public_dns().await;
     }
+}
+
+async fn tun_handles_placeholder() -> bool {
+    let config = tokio::time::timeout(
+        Duration::from_secs(2),
+        crate::core::handle::Handle::mihomo().get_base_config(),
+    )
+    .await;
+    let Ok(Ok(config)) = config else { return false };
+    if !config.tun.enable || !config.tun.auto_route || config.tun.dns_hijack.is_empty() {
+        return false;
+    }
+    let interface = crate::core::tunnelmaster_network::route_interface("-inet", PLACEHOLDER_DNS).await;
+    interface.is_ok_and(|name| {
+        name.is_some_and(|name| {
+            name.starts_with("utun") && (!config.tun.device.starts_with("utun") || config.tun.device == name)
+        })
+    })
 }
 
 pub async fn restore_public_dns() -> anyhow::Result<()> {

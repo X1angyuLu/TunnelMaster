@@ -79,13 +79,24 @@ pub async fn save_yaml<T: Serialize + Sync>(path: &Path, data: &T, prefix: Optio
 
 /// Atomic replace with pre-serialized content; the payload must not need the encryption scope.
 pub async fn save_yaml_str(path: &Path, yaml_str: &str) -> Result<()> {
+    save_yaml_str_with_policy(path, yaml_str, false).await
+}
+
+pub(crate) async fn save_private_yaml_str(path: &Path, yaml_str: &str) -> Result<()> {
+    save_yaml_str_with_policy(path, yaml_str, true).await
+}
+
+async fn save_yaml_str_with_policy(path: &Path, yaml_str: &str, private: bool) -> Result<()> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    if private {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
     let (temporary, file) = loop {
         let temporary = path.with_extension(format!("tmp-{}-{}", std::process::id(), nanoid!()));
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-        {
+        match options.open(&temporary) {
             Ok(file) => break (temporary, file),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(error) => {
@@ -112,9 +123,20 @@ pub async fn save_yaml_str(path: &Path, yaml_str: &str) -> Result<()> {
         .with_context(|| format!("failed to flush temporary file for \"{}\"", path.display()))?;
     drop(file);
 
+    if !private {
+        preserve_yaml_permissions(path, temporary.as_path()).await?;
+    }
+
+    std::fs::rename(temporary.as_path(), path)
+        .with_context(|| format!("failed to replace file \"{}\"", path.display()))?;
+    let _ = ScopeGuard::into_inner(temporary);
+    Ok(())
+}
+
+async fn preserve_yaml_permissions(path: &Path, temporary: &Path) -> Result<()> {
     match tokio::fs::symlink_metadata(path).await {
         Ok(metadata) if metadata.file_type().is_file() => {
-            tokio::fs::set_permissions(temporary.as_path(), metadata.permissions())
+            tokio::fs::set_permissions(temporary, metadata.permissions())
                 .await
                 .with_context(|| format!("failed to preserve permissions for \"{}\"", path.display()))?;
         }
@@ -125,9 +147,6 @@ pub async fn save_yaml_str(path: &Path, yaml_str: &str) -> Result<()> {
         }
     }
 
-    std::fs::rename(temporary.as_path(), path)
-        .with_context(|| format!("failed to replace file \"{}\"", path.display()))?;
-    let _ = ScopeGuard::into_inner(temporary);
     Ok(())
 }
 

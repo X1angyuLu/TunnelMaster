@@ -70,11 +70,9 @@ if [ -f .original_dns.txt ]; then
         mv .original_dns.txt "$backup" || exit 1
     fi
 fi
-# The placeholder is ours, not the user's: keep the backup taken before it was applied.
+# Preserve the previous resolver only when we actually change it.
 if [ "$original_dns" != "$1" ]; then
     echo "$original_dns" >"$backup" || exit 1
     networksetup -setdnsservers "$hardware_port" "$1"
     [ "$(dns_of "$hardware_port")" = "$1" ] || { echo "Failed to set DNS for $hardware_port." >&2; exit 1; }
-elif [ ! -f "$backup" ]; then
-    echo "empty" >"$backup" || exit 1
 fi

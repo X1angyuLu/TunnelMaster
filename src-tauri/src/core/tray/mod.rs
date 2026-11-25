@@ -93,27 +93,19 @@ impl TrayState {
     }
 
     #[allow(clippy::missing_const_for_fn)]
-    fn default_icon(verge: &IVerge, kind: IconKind) -> (bool, Cow<'_, [u8]>) {
+    fn default_icon(_verge: &IVerge, kind: IconKind) -> (bool, Cow<'_, [u8]>) {
         #[cfg(target_os = "macos")]
-        {
-            let is_mono = verge.tray_icon.as_deref().unwrap_or("monochrome") == "monochrome";
-            if is_mono {
-                return (
-                    false,
-                    match kind {
-                        IconKind::Common => Cow::Borrowed(include_bytes!("../../../icons/tray-icon-mono.ico")),
-                        IconKind::SysProxy => {
-                            Cow::Borrowed(include_bytes!("../../../icons/tray-icon-sys-mono-new.ico"))
-                        }
-                        IconKind::Tun => Cow::Borrowed(include_bytes!("../../../icons/tray-icon-tun-mono-new.ico")),
-                    },
-                );
-            }
-        }
+        return (
+            false,
+            match kind {
+                IconKind::Common => Cow::Borrowed(include_bytes!("../../../icons/tunnelmaster-tray-idle.png")),
+                IconKind::SysProxy | IconKind::Tun => {
+                    Cow::Borrowed(include_bytes!("../../../icons/tunnelmaster-tray-active.png"))
+                }
+            },
+        );
 
         #[cfg(not(target_os = "macos"))]
-        let _ = verge;
-
         (
             false,
             match kind {
@@ -255,15 +247,16 @@ impl Tray {
             return Ok(());
         };
 
-        let (_is_custom_icon, icon_bytes) = TrayState::get_tray_icon(verge).await;
+        let (is_custom_icon, icon_bytes) = TrayState::get_tray_icon(verge).await;
 
         let template = {
             #[cfg(target_os = "macos")]
             {
-                verge.tray_icon.as_ref().is_none_or(|v| v == "monochrome")
+                is_custom_icon && verge.tray_icon.as_ref().is_none_or(|v| v == "monochrome")
             }
             #[cfg(not(target_os = "macos"))]
             {
+                let _ = is_custom_icon;
                 false
             }
         };
@@ -315,7 +308,7 @@ impl Tray {
         );
 
         let tooltip = format!(
-            "Clash Verge {}\n{}: {}\n{}: {}\n{}: {}",
+            "TunnelMaster {}\n{}: {}\n{}: {}\n{}: {}",
             reassembled_version,
             sys_proxy_text,
             switch_str(system_proxy),
@@ -369,7 +362,9 @@ impl Tray {
 
         let verge = Config::verge().await.data_arc();
 
-        let icon_bytes = TrayState::get_tray_icon(&verge).await.1;
+        let (is_custom_icon, icon_bytes) = TrayState::get_tray_icon(&verge).await;
+        #[cfg(not(target_os = "macos"))]
+        let _ = is_custom_icon;
         let icon = tauri::image::Image::from_bytes(&icon_bytes)?;
 
         #[cfg(target_os = "linux")]
@@ -382,7 +377,7 @@ impl Tray {
         let mut builder = TrayIconBuilder::with_id(TRAY_ID).icon(icon).icon_as_template(false);
         #[cfg(target_os = "macos")]
         {
-            let is_monochrome = verge.tray_icon.as_ref().is_none_or(|v| v == "monochrome");
+            let is_monochrome = is_custom_icon && verge.tray_icon.as_ref().is_none_or(|v| v == "monochrome");
             builder = builder.icon_as_template(is_monochrome);
         }
 
@@ -868,7 +863,7 @@ async fn create_tray_menu(
     Ok(menu)
 }
 
-fn on_tray_icon_event(_tray_icon: &TrayIcon, tray_event: TrayIconEvent) {
+fn on_tray_icon_event(tray_icon: &TrayIcon, tray_event: TrayIconEvent) {
     if matches!(
         tray_event,
         TrayIconEvent::Move { .. } | TrayIconEvent::Leave { .. } | TrayIconEvent::Enter { .. }
@@ -879,6 +874,7 @@ fn on_tray_icon_event(_tray_icon: &TrayIcon, tray_event: TrayIconEvent) {
     if let TrayIconEvent::Click {
         button: MouseButton::Left,
         button_state: MouseButtonState::Down,
+        position,
         ..
     } = tray_event
     {
@@ -887,10 +883,19 @@ fn on_tray_icon_event(_tray_icon: &TrayIcon, tray_event: TrayIconEvent) {
             return;
         }
 
-        AsyncHandler::spawn(|| async move {
+        #[cfg(target_os = "macos")]
+        let app_handle = tray_icon.app_handle().clone();
+        #[cfg(not(target_os = "macos"))]
+        let _ = (tray_icon, position);
+        AsyncHandler::spawn(move || async move {
             let verge = Config::verge().await.data_arc();
-            let verge_tray_event = verge.tray_event.clone().unwrap_or_else(|| "main_window".into());
-            let verge_tray_action = TrayAction::from(verge_tray_event.as_str());
+            let default_action = if cfg!(target_os = "macos") {
+                "usage"
+            } else {
+                "main_window"
+            };
+            let verge_tray_event = verge.tray_event.as_deref().unwrap_or(default_action);
+            let verge_tray_action = TrayAction::from(verge_tray_event);
             logging!(debug, Type::Tray, "tray event: {verge_tray_action:?}");
             match verge_tray_action {
                 TrayAction::SystemProxy => {
@@ -907,6 +912,13 @@ fn on_tray_icon_event(_tray_icon: &TrayIcon, tray_event: TrayIconEvent) {
                 // tray_menu 模式下菜单由系统原生展示（见 set_show_menu_on_left_click），
                 // 左键点击事件无需额外处理
                 TrayAction::TrayMenu => {}
+                #[cfg(target_os = "macos")]
+                TrayAction::Usage => {
+                    logging_error!(
+                        Type::Tray,
+                        crate::tunnelmaster_traffic::panel::toggle(&app_handle, position).await
+                    );
+                }
                 TrayAction::Unknown => {
                     logging!(warn, Type::Tray, "invalid tray event: {}", verge_tray_event);
                 }

@@ -1,7 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "identifier": "io.github.clash-verge-rev.clash-verge-rev",
+  "identifier": "com.x1angyulu.TunnelMaster.verge",
   "bundle": {
+    "active": false,
     "targets": ["deb", "rpm"],
     "linux": {
       "deb": {
@@ -25,11 +26,11 @@
       }
     },
     "externalBin": [
-      "./sidecar/clash-verge-service",
-      "./sidecar/clash-verge-service-install",
-      "./sidecar/clash-verge-service-uninstall",
-      "./sidecar/verge-mihomo",
-      "./sidecar/verge-mihomo-alpha"
+      "./sidecar/tunnelmaster-service",
+      "./sidecar/tunnelmaster-service-install",
+      "./sidecar/tunnelmaster-service-uninstall",
+      "./sidecar/tm-mihomo",
+      "./sidecar/tm-mihomo-alpha"
     ]
   }
 }

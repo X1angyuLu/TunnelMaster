@@ -4,7 +4,9 @@
 <dict>
     <key>AssociatedBundleIdentifiers</key>
     <array>
-        <string>io.github.clash-verge-rev.clash-verge-rev.service</string>
+        <string>com.x1angyulu.TunnelMaster.verge.service</string>
     </array>
+    <key>CFBundleDisplayName</key>
+    <string>TunnelMaster</string>
 </dict>
 </plist>

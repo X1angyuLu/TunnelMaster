@@ -265,7 +265,7 @@ pub struct IVergeTheme {
 }
 
 impl IVerge {
-    pub const VALID_CLASH_CORES: &'static [&'static str] = &["verge-mihomo", "verge-mihomo-alpha"];
+    pub const VALID_CLASH_CORES: &'static [&'static str] = &["tm-mihomo", "tm-mihomo-alpha"];
 
     pub async fn validate_and_fix_config() -> Result<()> {
         let config_path = dirs::verge_path()?;
@@ -282,19 +282,19 @@ impl IVerge {
                 logging!(
                     warn,
                     Type::Config,
-                    "启动时发现无效的clash_core配置: '{}', 将自动修正为 'verge-mihomo'",
+                    "启动时发现无效的clash_core配置: '{}', 将自动修正为 'tm-mihomo'",
                     core
                 );
-                config.clash_core = Some("verge-mihomo".into());
+                config.clash_core = Some("tm-mihomo".into());
                 needs_fix = true;
             }
         } else {
             logging!(
                 info,
                 Type::Config,
-                "启动时发现未配置clash_core, 将设置为默认值 'verge-mihomo'"
+                "启动时发现未配置clash_core, 将设置为默认值 'tm-mihomo'"
             );
-            config.clash_core = Some("verge-mihomo".into());
+            config.clash_core = Some("tm-mihomo".into());
             needs_fix = true;
         }
 
@@ -327,7 +327,7 @@ impl IVerge {
     }
 
     pub fn get_valid_clash_core(&self) -> String {
-        self.clash_core.clone().unwrap_or_else(|| "verge-mihomo".into())
+        self.clash_core.clone().unwrap_or_else(|| "tm-mihomo".into())
     }
 
     pub async fn new() -> Self {
@@ -357,7 +357,7 @@ impl IVerge {
         Self {
             app_log_max_size: Some(128),
             app_log_max_count: Some(8),
-            clash_core: Some("verge-mihomo".into()),
+            clash_core: Some("tm-mihomo".into()),
             language: Some(clash_verge_i18n::system_language().into()),
             theme_mode: Some("system".into()),
             #[cfg(not(target_os = "windows"))]
@@ -386,17 +386,17 @@ impl IVerge {
             pac_file_content: Some(DEFAULT_PAC.into()),
             proxy_host: Some("127.0.0.1".into()),
             #[cfg(not(target_os = "windows"))]
-            verge_redir_port: Some(7895),
+            verge_redir_port: Some(network::ports::DEFAULT_REDIR),
             #[cfg(not(target_os = "windows"))]
             verge_redir_enabled: Some(false),
             #[cfg(target_os = "linux")]
-            verge_tproxy_port: Some(7896),
+            verge_tproxy_port: Some(network::ports::DEFAULT_TPROXY),
             #[cfg(target_os = "linux")]
             verge_tproxy_enabled: Some(false),
             verge_mixed_port: Some(network::ports::DEFAULT_MIXED),
-            verge_socks_port: Some(7898),
+            verge_socks_port: Some(network::ports::DEFAULT_SOCKS),
             verge_socks_enabled: Some(false),
-            verge_port: Some(7899),
+            verge_port: Some(network::ports::DEFAULT_HTTP),
             verge_http_enabled: Some(false),
             enable_proxy_guard: Some(false),
             enable_bypass_check: Some(true),

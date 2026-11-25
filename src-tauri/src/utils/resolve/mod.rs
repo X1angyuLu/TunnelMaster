@@ -92,6 +92,7 @@ async fn resolve_setup() {
         init_silent_updater(),
     );
 
+    crate::tunnelmaster_traffic::start();
     Handle::refresh_clash();
     refresh_tray_menu().await;
     resolve_done();
@@ -170,9 +171,11 @@ async fn init_silent_updater() {
     use crate::core::SilentUpdater;
     use crate::core::handle::Handle;
 
-    logging!(debug, Type::Setup, "Initializing silent updater...");
-
     let app_handle = Handle::app_handle();
+    if !app_handle.config().plugins.0.contains_key("updater") {
+        return;
+    }
+    logging!(debug, Type::Setup, "Initializing silent updater...");
 
     // Install cached updates before starting background checks.
     if SilentUpdater::global().try_install_on_startup(app_handle).await {

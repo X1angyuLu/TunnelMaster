@@ -474,6 +474,11 @@ fn table_effect(result: &Result<()>) -> TableEffect<'_> {
 pub async fn apply() -> Result<()> {
     let running_mode = CoreManager::global().get_running_mode();
     let verge = Config::verge().await.latest_arc();
+    #[cfg(target_os = "macos")]
+    if !super::tunnelmaster_network::check_proxy(verge.enable_system_proxy.unwrap_or_default()).await? {
+        stop_guard().await;
+        return Ok(());
+    }
     let route = proxy_backend_route(cfg!(target_os = "macos"), &running_mode);
     tracing::Span::current().record("route", tracing::field::debug(&route));
     let result = match route {
@@ -496,6 +501,14 @@ pub async fn apply() -> Result<()> {
             .await
         }
     };
+    #[cfg(target_os = "macos")]
+    if result.is_ok() {
+        if verge.enable_system_proxy.unwrap_or_default() {
+            super::tunnelmaster_network::note_enabled_proxy(&verge).await?;
+        } else {
+            super::tunnelmaster_network::forget_proxy();
+        }
+    }
     // Settle failures where every proxy-apply path converges.
     settle_table(
         table_effect(&result),
@@ -554,10 +567,15 @@ async fn clear_with_retry() -> Result<()> {
 
 #[tracing::instrument(skip_all, level = "info", fields(route = tracing::field::Empty))]
 async fn clear_inner() -> Result<()> {
+    #[cfg(target_os = "macos")]
+    if !super::tunnelmaster_network::check_proxy(false).await? {
+        stop_guard().await;
+        return Ok(());
+    }
     let running_mode = CoreManager::global().get_running_mode();
     let route = proxy_backend_route(cfg!(target_os = "macos"), &running_mode);
     tracing::Span::current().record("route", tracing::field::debug(&route));
-    match route {
+    let result = match route {
         ProxyBackendRoute::Local => Sysopt::global().reset_sysproxy().await.map_err(classify_local_failure),
         ProxyBackendRoute::Service => {
             SERVICE_PROXY_OPERATIONS
@@ -569,7 +587,12 @@ async fn clear_inner() -> Result<()> {
                 })
                 .await
         }
+    };
+    #[cfg(target_os = "macos")]
+    if result.is_ok() {
+        super::tunnelmaster_network::forget_proxy();
     }
+    result
 }
 
 pub async fn refresh_guard() -> Result<()> {
@@ -582,7 +605,7 @@ pub async fn refresh_guard() -> Result<()> {
         ProxyBackendRoute::Local
     ) {
         // Retire the warning only after a guard is enforcing.
-        if Sysopt::global().refresh_guard().await {
+        if !cfg!(target_os = "macos") && Sysopt::global().refresh_guard().await {
             notification::retire_guard_failures();
         }
         return Ok(());

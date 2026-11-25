@@ -38,6 +38,10 @@ pub(super) async fn apply_verge_patch_locked(
     patch: &IVerge,
     not_save_file: bool,
 ) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    if patch.enable_tun_mode == Some(true) && !Config::verge().await.data_arc().enable_tun_mode.unwrap_or_default() {
+        crate::core::tunnelmaster_network::check_tun().await?;
+    }
     super::executor::apply(
         _config_write,
         super::executor::Patch::Verge {

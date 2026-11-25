@@ -2,13 +2,14 @@ use super::CmdResult;
 use crate::{
     cmd::StringifyErr as _,
     cmd::validate::{ValidationNoticeTarget, handle_validation_notice},
-    config::{Config, IProfiles, PrfItem},
+    config::{Config, IProfiles, PrfItem, profiles::PROFILE_WRITE_LOCK},
     core::auto_backup::{AutoBackupManager, AutoBackupTrigger},
     core::{
         CoreManager, handle,
         validate::{CoreConfigValidator, ValidationOutcome},
     },
-    utils::dirs,
+    tunnelmaster_profiles::WIREGUARD_PROFILE_PREFIX,
+    utils::{dirs, help},
 };
 use clash_verge_logging::{Type, logging};
 use smartstring::alias::String;
@@ -21,13 +22,19 @@ pub async fn save_profile_file(
     index: std::string::String,
     file_data: Option<std::string::String>,
 ) -> CmdResult<ValidationOutcome> {
-    let index: String = index.into();
-    let file_data = file_data.map(String::from);
     let file_data = match file_data {
-        Some(d) => d,
+        Some(data) => String::from(data),
         None => return Ok(ValidationOutcome::Valid),
     };
+    transform_profile_file(index.into(), |_| Ok(Some(file_data))).await
+}
 
+pub(crate) async fn transform_profile_file<F>(index: String, transform: F) -> CmdResult<ValidationOutcome>
+where
+    F: FnOnce(&str) -> CmdResult<Option<String>> + Send,
+{
+    let _write = PROFILE_WRITE_LOCK.lock().await;
+    let private = index.starts_with(WIREGUARD_PROFILE_PREFIX);
     let backup_trigger = match index.as_str() {
         "Merge" => Some(AutoBackupTrigger::GlobalMerge),
         "Script" => Some(AutoBackupTrigger::GlobalScript),
@@ -69,8 +76,10 @@ pub async fn save_profile_file(
         String::new()
     };
 
-    // 保存新的配置文件
-    fs::write(&file_path, &file_data).await.stringify_err()?;
+    let Some(file_data) = transform(&original_content)? else {
+        return Ok(ValidationOutcome::Valid);
+    };
+    save_profile_data(&file_path, &file_data, private).await?;
 
     let changes_applied = handle_saved_profile_file(
         &file_path_str,
@@ -80,6 +89,7 @@ pub async fn save_profile_file(
         is_merge_file,
         is_script_file,
         affects_runtime,
+        private,
     )
     .await?;
 
@@ -96,11 +106,20 @@ async fn restore_original(
     file_path: &std::path::Path,
     original_content: &str,
     original_existed: bool,
+    private: bool,
 ) -> CmdResult<()> {
     if original_existed {
-        fs::write(file_path, original_content).await.stringify_err()
+        save_profile_data(file_path, original_content, private).await
     } else {
         fs::remove_file(file_path).await.stringify_err()
+    }
+}
+
+async fn save_profile_data(file_path: &std::path::Path, data: &str, private: bool) -> CmdResult<()> {
+    if private {
+        help::save_private_yaml_str(file_path, data).await.stringify_err()
+    } else {
+        fs::write(file_path, data).await.stringify_err()
     }
 }
 
@@ -133,6 +152,7 @@ async fn handle_saved_profile_file(
     is_merge_file: bool,
     is_script_file: bool,
     affects_runtime: bool,
+    private: bool,
 ) -> CmdResult<ValidationOutcome> {
     let (target, file_type) = if is_script_file {
         (ValidationNoticeTarget::Script, "脚本文件")
@@ -146,13 +166,13 @@ async fn handle_saved_profile_file(
         Ok(outcome) if outcome.is_valid() => {}
         Ok(outcome) => {
             logging!(warn, Type::Config, "[cmd配置save] 文件验证失败: {}", outcome);
-            restore_original(file_path, original_content, original_existed).await?;
+            restore_original(file_path, original_content, original_existed, private).await?;
             handle_validation_notice(&outcome, target, file_type);
             return Ok(outcome);
         }
         Err(e) => {
             logging!(error, Type::Config, "[cmd配置save] 验证过程发生错误: {e:#}");
-            restore_original(file_path, original_content, original_existed).await?;
+            restore_original(file_path, original_content, original_existed, private).await?;
             return Err(e.to_string().into());
         }
     }
@@ -173,13 +193,13 @@ async fn handle_saved_profile_file(
         }
         Ok(outcome) => {
             logging!(warn, Type::Config, "[cmd配置save] 运行时配置应用失败: {}", outcome);
-            restore_original(file_path, original_content, original_existed).await?;
+            restore_original(file_path, original_content, original_existed, private).await?;
             handle_validation_notice(&outcome, ValidationNoticeTarget::Runtime, "运行时配置");
             Ok(outcome)
         }
         Err(err) => {
             logging!(error, Type::Config, "[cmd配置save] 运行时配置应用错误: {err:#}");
-            restore_original(file_path, original_content, original_existed).await?;
+            restore_original(file_path, original_content, original_existed, private).await?;
             Err(err.to_string().into())
         }
     }

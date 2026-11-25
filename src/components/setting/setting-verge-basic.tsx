@@ -136,13 +136,16 @@ const SettingVergeBasic = ({ onError }: Props) => {
           label={t('settings.components.verge.basic.fields.trayClickEvent')}
         >
           <GuardState
-            value={tray_event ?? 'main_window'}
+            value={tray_event ?? (OS === 'macos' ? 'usage' : 'main_window')}
             onCatch={onError}
             onFormat={(e: any) => e.target.value}
             onChange={(e) => onChangeData({ tray_event: e })}
             onGuard={(e) => patchVerge({ tray_event: e })}
           >
             <Select size="small" sx={{ width: 140, '> div': { py: '7.5px' } }}>
+              {OS === 'macos' && (
+                <MenuItem value="usage">{t('usage.title')}</MenuItem>
+              )}
               <MenuItem value="main_window">
                 {t(
                   'settings.components.verge.basic.trayOptions.showMainWindow',

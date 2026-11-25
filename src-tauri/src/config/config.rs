@@ -224,7 +224,7 @@ impl Config {
 
     pub(crate) async fn write_runtime_file(yaml: &str) -> Result<PathBuf> {
         let path = dirs::app_home_dir()?.join(files::RUNTIME_CONFIG);
-        help::save_yaml_str(&path, yaml).await?;
+        help::save_private_yaml_str(&path, yaml).await?;
         Ok(path)
     }
 

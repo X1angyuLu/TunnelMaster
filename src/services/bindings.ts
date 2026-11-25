@@ -8,6 +8,61 @@ export const commands = {
   /**  获取应用的运行时间（毫秒） */
   getAppUptime: () => __TAURI_INVOKE<number>('get_app_uptime'),
   exportDiagnosticInfo: () => __TAURI_INVOKE<null>('export_diagnostic_info'),
+  getTunnelmasterDoSettings: () =>
+    __TAURI_INVOKE<DigitalOceanSettings>('get_tunnelmaster_do_settings'),
+  saveTunnelmasterDoCredentials: (
+    dropletId: string,
+    token: string,
+    storage: DigitalOceanCredentialStorage,
+  ) =>
+    __TAURI_INVOKE<DigitalOceanSettings>('save_tunnelmaster_do_credentials', {
+      dropletId,
+      token,
+      storage,
+    }),
+  listTunnelmasterDoDroplets: (
+    token: string | null,
+    expectedDropletId: string | null,
+  ) =>
+    __TAURI_INVOKE<DigitalOceanDropletSummary[]>(
+      'list_tunnelmaster_do_droplets',
+      { token, expectedDropletId },
+    ),
+  selectTunnelmasterDoDroplet: (dropletId: string) =>
+    __TAURI_INVOKE<DigitalOceanSettings>('select_tunnelmaster_do_droplet', {
+      dropletId,
+    }),
+  getTunnelmasterDoReport: (days: number, expectedDropletId: string | null) =>
+    __TAURI_INVOKE<DigitalOceanBandwidthReport>('get_tunnelmaster_do_report', {
+      days,
+      expectedDropletId,
+    }),
+  getTunnelmasterDoMonthlyTransfer: (expectedDropletId: string | null) =>
+    __TAURI_INVOKE<DigitalOceanMonthlyTransfer>(
+      'get_tunnelmaster_do_monthly_transfer',
+      { expectedDropletId },
+    ),
+  clearTunnelmasterDoCredentials: () =>
+    __TAURI_INVOKE<DigitalOceanSettings>('clear_tunnelmaster_do_credentials'),
+  migrateTunnelmasterDoCredentials: () =>
+    __TAURI_INVOKE<DigitalOceanSettings>('migrate_tunnelmaster_do_credentials'),
+  importTunnelmasterWireguard: () =>
+    __TAURI_INVOKE<string | null>('import_tunnelmaster_wireguard'),
+  getTunnelmasterRules: (index: string) =>
+    __TAURI_INVOKE<{
+      directDomains: string[]
+      proxyDomains: string[]
+      chinaIpDirect: boolean
+      unmatched: UnmatchedTraffic
+    } | null>('get_tunnelmaster_rules', { index }),
+  saveTunnelmasterRules: (index: string, rules: TunnelMasterRules) =>
+    __TAURI_INVOKE<ValidationOutcome>('save_tunnelmaster_rules', {
+      index,
+      rules,
+    }),
+  tunnelmasterLocalHistory: (range: string) =>
+    __TAURI_INVOKE<LocalHistory>('tunnelmaster_local_history', { range }),
+  openTunnelmasterUsage: () => __TAURI_INVOKE<null>('open_tunnelmaster_usage'),
   probeListener: (request: ListenerProbe) =>
     __TAURI_INVOKE<ListenerProbeOutcome>('probe_listener', { request }),
   saveProxyPorts: (settings: ProxyPortSettings) =>
@@ -283,6 +338,51 @@ export type CoreUpgradeReport = {
 export type DelayHistory = {
   time: string
   delay: number
+}
+
+export type DigitalOceanBandwidthReport = {
+  from: number
+  until: number
+  inbound: DigitalOceanBandwidthSeries
+  outbound: DigitalOceanBandwidthSeries
+}
+
+export type DigitalOceanBandwidthSample = {
+  timestamp: number | null
+  mbps: number | null
+}
+
+export type DigitalOceanBandwidthSeries = {
+  samples: DigitalOceanBandwidthSample[]
+  estimatedBytes: number | null
+  coveredSeconds: number | null
+  peakMbps: number | null
+}
+
+export type DigitalOceanCredentialStorage = 'keychain' | 'localFile'
+
+export type DigitalOceanDropletSummary = {
+  id: string
+  name: string
+  region: string
+  status: string | null
+}
+
+export type DigitalOceanMonthlyTransfer = {
+  monthStart: number
+  asOf: number
+  outboundGib: number | null
+  coverage: number | null
+  planGib: number | null
+  accruedGib: number | null
+  remainingGib: number | null
+  projectedAllowanceGib: number | null
+}
+
+export type DigitalOceanSettings = {
+  dropletId: string | null
+  storage: DigitalOceanCredentialStorage | null
+  keychainAvailable: boolean
 }
 
 export type DnsOverrideOutcome =
@@ -571,6 +671,29 @@ export type LocalBackupFile = {
   path: string
   last_modified: string
   content_length: number
+}
+
+export type LocalHistory = {
+  buckets: LocalTrafficBucket[]
+  from: number
+  until: number
+  bucket_seconds: number
+  sampled_at: number | null
+  current_upload: number
+  current_download: number
+  sampling: boolean
+}
+
+export type LocalTrafficBucket = {
+  start: number
+  upload: number
+  download: number
+  samples: number
+  connected_seconds: number | null
+  peak_download_rate: number
+  peak_upload_rate: number
+  peak_connections: number | null
+  sessions_started: number
 }
 
 export type NetworkInterfaceView = {
@@ -996,12 +1119,21 @@ export type ToggleableProxyPort = {
   port: number
 }
 
+export type TunnelMasterRules = {
+  directDomains: string[]
+  proxyDomains: string[]
+  chinaIpDirect: boolean
+  unmatched: UnmatchedTraffic
+}
+
 export type UnlockItem = {
   name: string
   status: string
   region: string | null
   check_time: string | null
 }
+
+export type UnmatchedTraffic = 'direct' | 'wireguard'
 
 export type ValidationErrorKind =
   | 'fileMissing'

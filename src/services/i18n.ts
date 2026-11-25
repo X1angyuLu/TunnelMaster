@@ -93,6 +93,7 @@ const STARTUP_LANGUAGE_SECTIONS = [
   'rules',
   'connections',
   'logs',
+  'usage',
 ] as const
 
 const localeModules = import.meta.glob<LocaleModule>('@/locales/*/*.json')
@@ -116,7 +117,9 @@ const loadLanguageSections = async (
   try {
     const entries = await Promise.all(
       sections.map(async (section) => {
-        const loader = localeLoaders[language]?.[section]
+        const loader =
+          localeLoaders[language]?.[section] ??
+          (section === 'usage' ? localeLoaders.en?.usage : undefined)
         if (!loader) {
           throw new Error(
             `Locale loader not found for language "${language}" section "${section}"`,

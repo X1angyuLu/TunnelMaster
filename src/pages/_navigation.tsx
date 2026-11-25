@@ -1,4 +1,5 @@
 import DnsOutlinedIcon from '@mui/icons-material/DnsOutlined'
+import EqualizerOutlinedIcon from '@mui/icons-material/EqualizerOutlined'
 import ForkRightOutlinedIcon from '@mui/icons-material/ForkRightOutlined'
 import HomeOutlinedIcon from '@mui/icons-material/HomeOutlined'
 import LanguageOutlinedIcon from '@mui/icons-material/LanguageOutlined'
@@ -26,6 +27,7 @@ import ProxyPage from './proxies'
 import RulesPage from './rules'
 import SettingPage from './settings'
 import UnlockPage from './unlock'
+import UsagePage from './usage'
 
 type NavigationItem = {
   label: (typeof navigationItems)[keyof typeof navigationItems]['label']
@@ -54,6 +56,14 @@ export const navItems: NavigationItem[] = [
     ...navigationItems.connections,
     icon: [<LanguageOutlinedIcon key="mui" />, <ConnectionsSvg key="svg" />],
     Component: ConnectionsPage,
+  },
+  {
+    ...navigationItems.usage,
+    icon: [
+      <EqualizerOutlinedIcon key="mui" />,
+      <EqualizerOutlinedIcon key="colorful" color="primary" />,
+    ],
+    Component: UsagePage,
   },
   {
     ...navigationItems.rules,

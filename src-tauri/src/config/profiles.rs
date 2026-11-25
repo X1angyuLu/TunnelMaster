@@ -415,6 +415,39 @@ impl IProfiles {
 // These helpers serialize asynchronous operations against committed profile data.
 use crate::config::Config;
 
+pub(crate) async fn append_tunnelmaster_wireguard(name: std::string::String, yaml: &str) -> Result<String> {
+    let _write = PROFILE_WRITE_LOCK.lock().await;
+    let profiles = Config::profiles().await;
+    let uid: String = help::get_uid(crate::tunnelmaster_profiles::WIREGUARD_PROFILE_PREFIX).into();
+    let filename = format!("{uid}.yaml");
+    let path = dirs::app_profiles_dir()?.join(&filename);
+    if fs::try_exists(&path).await? {
+        bail!("A profile with the generated ID already exists.");
+    }
+    let file = scopeguard::guard(path, |path| {
+        let _ = std::fs::remove_file(path);
+    });
+    help::save_private_yaml_str(&file, yaml).await?;
+    let item = PrfItem {
+        uid: Some(uid.clone()),
+        itype: Some("local".into()),
+        name: Some(name.into()),
+        file: Some(filename.into()),
+        desc: Some("WireGuard".into()),
+        updated: Some(chrono::Local::now().timestamp() as usize),
+        ..Default::default()
+    };
+    profiles
+        .with_data_modify(|mut profiles| async move {
+            profiles.items.get_or_insert_with(Vec::new).push(item);
+            profiles.save_file().await?;
+            Ok((profiles, ()))
+        })
+        .await?;
+    let _ = scopeguard::ScopeGuard::into_inner(file);
+    Ok(uid)
+}
+
 pub(crate) async fn profiles_append_item_with_filedata_safe(item: &PrfItem, file_data: Option<String>) -> Result<()> {
     let item = &mut PrfItem::from(item, file_data).await?;
     profiles_append_item_safe(item).await

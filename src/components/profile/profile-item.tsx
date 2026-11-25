@@ -31,9 +31,11 @@ import { BaseDialog } from '@/components/base'
 import { EditorViewer } from '@/components/profile/editor-viewer'
 import { GroupsEditorViewer } from '@/components/profile/groups-editor-viewer'
 import { RulesEditorViewer } from '@/components/profile/rules-editor-viewer'
+import { TunnelMasterRulesDialog } from '@/components/profile/tunnelmaster-rules-dialog'
 import { useEditorDocument } from '@/hooks/use-editor-document'
 import {
   getNextUpdateTime,
+  isTunnelMasterProfile,
   readProfileFile,
   saveProfileFile,
   updateProfile,
@@ -286,6 +288,7 @@ const ProfileItemBase = (props: ProfileItemProps) => {
 
   const [fileOpen, setFileOpen] = useState(false)
   const [rulesOpen, setRulesOpen] = useState(false)
+  const [tunnelMasterRulesOpen, setTunnelMasterRulesOpen] = useState(false)
   const [proxiesOpen, setProxiesOpen] = useState(false)
   const [groupsOpen, setGroupsOpen] = useState(false)
   const [mergeOpen, setMergeOpen] = useState(false)
@@ -528,6 +531,18 @@ const ProfileItemBase = (props: ProfileItemProps) => {
       handler: onForceSelect,
       disabled: false,
     },
+    ...(isTunnelMasterProfile(uid)
+      ? [
+          {
+            label: 'profiles.tunnelmaster.rules',
+            handler: () => {
+              setAnchorEl(null)
+              setTunnelMasterRulesOpen(true)
+            },
+            disabled: false,
+          },
+        ]
+      : []),
     {
       label: menuLabels.editInfo,
       handler: onEditInfo,
@@ -901,6 +916,12 @@ const ProfileItemBase = (props: ProfileItemProps) => {
           open={true}
           onSave={onSave}
           onClose={() => setRulesOpen(false)}
+        />
+      )}
+      {tunnelMasterRulesOpen && uid && (
+        <TunnelMasterRulesDialog
+          index={uid}
+          onClose={() => setTunnelMasterRulesOpen(false)}
         />
       )}
       {proxiesOpen && (

@@ -1,141 +1,34 @@
-<h1 align="center">
-  <img src="./src-tauri/icons/icon.png" alt="Clash" width="128" />
-  <br>
-  Continuation of <a href="https://github.com/zzzgydi/clash-verge">Clash Verge</a>
-  <br>
-</h1>
+# TunnelMaster
 
-<h3 align="center">
-A Clash Meta GUI based on <a href="https://github.com/tauri-apps/tauri">Tauri</a>.
-</h3>
+TunnelMaster 是基于 [Clash Verge Rev v2.5.10](https://github.com/clash-verge-rev/clash-verge-rev/releases/tag/v2.5.10) 的开源 macOS 代理客户端。它使用 Mihomo 运行系统代理、TUN、DNS 分流及订阅配置，并在同一个应用中提供本机和服务器侧的流量统计。
 
-<p align="center">
-  Languages:
-  <a href="./docs/README_en.md">English</a> ·
-  <a href="./docs/README_es.md">Español</a> ·
-  <a href="./docs/README_fa.md">فارسی</a> ·
-  <a href="./docs/README_ja.md">日本語</a> ·
-  <a href="./docs/README_ko.md">한국어</a> ·
-  <a href="./docs/README_pt.md">Português</a> ·
-  <a href="./docs/README_ru.md">Русский</a> ·
-  <a href="./README.md">简体中文</a>
-</p>
+## 日常使用
 
-## Preview
+- 在「订阅」中导入 Clash 配置、订阅链接或单个 WireGuard `.conf`。导入的 WireGuard 配置会作为独立条目出现，选中配置后可直接切换规则或全局模式。
+- 从 WireGuard 配置卡片打开 TunnelMaster 分流规则，可选默认出口、按大陆 IP 直连及 OpenAI 和 Claude 分流预设。保存活动配置时会验证并应用规则。
+- 点击 macOS 菜单栏地球打开用量面板。鼠标悬停图表查看明细，也可以选中单个时段。点外面或再次点击地球可收起。右键打开代理和模式操作。
+- 「流量用量」中的本机历史由应用后台采集，保留近一年。新版首次打开历史时会从旧版数据库导入已有记录，随后保存在独立数据库。
+- DigitalOcean 统计读取 Droplet 公网出站与入站数据，可切换监控对象。月度出站按 UTC 自然月估算。剩余额度结合套餐和 Droplet 存续时间估算，数据覆盖不足时留空。团队共享池和最终账单以 DigitalOcean 控制台为准。
 
-| Dark                             | Light                             |
-| -------------------------------- | --------------------------------- |
-| ![预览](./docs/preview_dark.png) | ![预览](./docs/preview_light.png) |
+## DigitalOcean 配置
 
-## Install
+在「流量用量」页面选择 Droplet，填写包含 `monitoring:read` 的 DigitalOcean 只读 Token。列出该账户所有 Droplet 还需要 `droplet:read`。可以通过 macOS 钥匙串或仅当前用户可读的本地文件保存。已经在旧版使用本地文件的用户可以在设置中导入旧版监控配置。
 
-请到发布页面下载对应的安装包：[Release page](https://github.com/clash-verge-rev/clash-verge-rev/releases)<br>
-Go to the [Release page](https://github.com/clash-verge-rev/clash-verge-rev/releases) to download the corresponding installation package<br>
-Supports Windows (x64/x86), Linux (x64/arm64) and macOS 11+ (intel/apple).
-支持 Windows (x64/x86)、Linux (x64/arm64) 和 macOS 11+ (intel/apple)。
+DigitalOcean 凭据与流量历史位于新应用的私有存储目录。上游的配置导出及 WebDAV 备份会包含导入的代理配置。因此，包含 WireGuard 私钥的配置导出也应按私钥保管。
 
-#### 我应当怎样选择发行版
+## 本地构建
 
-| 版本        | 特征                                     | 链接                                                                                   |
-| :---------- | :--------------------------------------- | :------------------------------------------------------------------------------------- |
-| Stable      | 正式版，高可靠性，适合日常使用。         | [Release](https://github.com/clash-verge-rev/clash-verge-rev/releases)                 |
-| Alpha(废弃) | 测试发布流程。                           | [Alpha](https://github.com/clash-verge-rev/clash-verge-rev/releases/tag/alpha)         |
-| AutoBuild   | 滚动更新版，适合测试反馈，可能存在缺陷。 | [AutoBuild](https://github.com/clash-verge-rev/clash-verge-rev/releases/tag/autobuild) |
+安装本仓库 `rust-toolchain.toml` 指定的 Rust、Node.js 和 pnpm。在 Apple 芯片 Mac 上运行：
 
-#### 安装说明和常见问题，请到 [文档页](https://clash-verge-rev.github.io/) 查看
-
-### TG 频道: [@clash_verge_rev](https://t.me/clash_verge_re)
-
----
-
-## Promotion
-
-### ✈️ [AI云边 -- 全新架构机场 ClaudeBorder](https://cruise.54678999.xyz/#/register?code=58q5UJZc)
-
-🔥热销中使用本链接注册即送 **3 天免费试用**，每日 **1GB 流量**：👉 [点此注册](https://cruise.54678999.xyz/#/register?code=58q5UJZc)
-
-#### AI云边 -- 全新架构机场。
-
-- 💻 多次**技术迭代后**全新亮相。
-- 🗺 全**高速稳定**正价节点。
-- 🌏 **海外团队**，不跑路
-- 🚀 线路**冗余**设计，**自动化运维**对抗各类封锁
-- 👨‍🦲 团队架构师为**大厂**网络架构师
-- 💰 极致**稳定**，亲民价**价格**
-- 🌐 全面支持**流媒体及各AI访问**
-- 🙋 7*12小时真人客服。解决您的各类问题。
-
-🌐 官网：👉 [https://www.claudeborder.com](https://cruise.54678999.xyz/#/register?code=58q5UJZc)
-
-### 🤖 [GPTKefu —— 与 Crisp 深度整合的 AI 智能客服平台](https://gptkefu.com)
-
-- 🧠 深度理解完整对话上下文 + 图片识别，自动给出专业、精准的回复，告别机械式客服。
-- ♾️ **不限回答数量**，无额度焦虑，区别于其他按条计费的 AI 客服产品。
-- 💬 售前咨询、售后服务、复杂问题解答，全场景轻松覆盖，真实用户案例已验证效果。
-- ⚡ 3 分钟极速接入，零门槛上手，即刻提升客服效率与客户满意度。
-- 🎁 高级套餐免费试用 14 天，先体验后付费：👉 [立即试用](https://gptkefu.com)
-- 📢 智能客服TG 频道：[@crisp_ai](https://t.me/crisp_ai)
-
----
-
-## Features
-
-- 基于性能强劲的 Rust 和 Tauri 2 框架
-- 内置[Clash.Meta(mihomo)](https://github.com/MetaCubeX/mihomo)内核，并支持切换 `Alpha` 版本内核。
-- 简洁美观的用户界面，支持自定义主题颜色、代理组/托盘图标以及 `CSS Injection`。
-- 配置文件管理和增强（Merge 和 Script），配置文件语法提示。
-- 系统代理和守卫、`TUN(虚拟网卡)` 模式。
-- 可视化节点和规则编辑
-- WebDav 配置备份和同步
-
-### FAQ
-
-Refer to [Doc FAQ Page](https://clash-verge-rev.github.io/faq/windows.html)
-
-### Donation
-
-[捐助Clash Verge Rev的开发](https://github.com/sponsors/clash-verge-rev)
-
-## Development
-
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for more details.
-
-To run the development server, execute the following commands after all prerequisites for **Tauri** are installed:
-
-```shell
-pnpm i
-pnpm run prebuild
-pnpm dev
+```sh
+pnpm install --frozen-lockfile
+pnpm prebuild aarch64-apple-darwin
+pnpm gen:contract
+pnpm tauri build --debug --bundles app
 ```
 
-`pnpm dev` preserves the Development Channel's installed service state: an
-existing service is used, while a previously uninstalled service remains
-uninstalled and the app starts in Sidecar mode. Use `pnpm dev:service` to
-explicitly install or update the isolated development service before launch,
-or `pnpm dev:sidecar` to force the unprivileged Sidecar workflow.
+Intel Mac 将预构建目标改为 `x86_64-apple-darwin`。TUN 使用与新应用同源码构建的 macOS 助手，首次安装需要管理员授权。发行前需要单独配置应用签名、公证及更新源。
 
-## Contributions
+## 许可
 
-Issue and PR welcome!
-
-## Acknowledgement
-
-Clash Verge rev was based on or inspired by these projects and so on:
-
-- [zzzgydi/clash-verge](https://github.com/zzzgydi/clash-verge): A Clash GUI based on tauri. Supports Windows, macOS and Linux.
-- [tauri-apps/tauri](https://github.com/tauri-apps/tauri): Build smaller, faster, and more secure desktop applications with a web frontend.
-- [Dreamacro/clash](https://github.com/Dreamacro/clash): A rule-based tunnel in Go.
-- [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo): A rule-based tunnel in Go.
-- [Fndroid/clash_for_windows_pkg](https://github.com/Fndroid/clash_for_windows_pkg): A Windows/macOS GUI based on Clash.
-- [vitejs/vite](https://github.com/vitejs/vite): Next generation frontend tooling. It's fast!
-
-## Privacy
-
-Clash Verge Rev 不收集任何用户数据，配置与日志仅保存在本地。详见[隐私政策](./PRIVACY.md)。
-
-Clash Verge Rev does not collect any user data; configuration and logs stay on
-your own device. See the [Privacy Policy](./PRIVACY.md) for details.
-
-## License
-
-GPL-3.0 License. See [License here](./LICENSE) for details.
+本分支基于 [Clash Verge Rev](https://github.com/clash-verge-rev/clash-verge-rev) 并按 [GPL-3.0](LICENSE) 发布。来自原生 TunnelMaster 的代码和行为测试保留 [MIT 声明](LICENSE.TunnelMaster)。TUN 助手的固定来源和分支变更见 [服务源码说明](vendor/tunnelmaster-service/UPSTREAM.md)。

@@ -46,6 +46,7 @@ import {
   enhanceProfiles,
   getRuntimeLogs,
   importProfile,
+  importTunnelMasterWireguard,
   reorderProfile,
   updateProfile,
 } from '@/services/cmds'
@@ -91,6 +92,7 @@ const ProfilePage = () => {
     string | null
   >(null)
   const [loading, setLoading] = useState(false)
+  const [importingWireGuard, setImportingWireGuard] = useState(false)
 
   const [batchMode, setBatchMode] = useState(false)
   const [selectedProfiles, setSelectedProfiles] = useState<Set<string>>(
@@ -115,6 +117,24 @@ const ProfilePage = () => {
     error,
     isStale,
   } = useProfiles()
+
+  const onImportWireGuard = useLockFn(async () => {
+    setImportingWireGuard(true)
+    try {
+      const result = await mutate(importTunnelMasterWireguard, {
+        id: 'import-wireguard-profile',
+        errorNotice: false,
+      })
+      if (result.ok && result.value) {
+        await mutateProfiles()
+        showNotice.success('profiles.tunnelmaster.imported')
+      }
+    } catch (error) {
+      showNotice.error(error)
+    } finally {
+      setImportingWireGuard(false)
+    }
+  })
 
   useEffect(() => {
     currentProfileRef.current = profiles.current!
@@ -865,6 +885,15 @@ const ProfilePage = () => {
           onClick={onImport}
         >
           {t('profiles.page.actions.import')}
+        </Button>
+        <Button
+          size="small"
+          variant="outlined"
+          loading={importingWireGuard}
+          sx={{ flexShrink: 0, textTransform: 'none' }}
+          onClick={onImportWireGuard}
+        >
+          {t('profiles.tunnelmaster.import')}
         </Button>
         <Button
           variant="contained"

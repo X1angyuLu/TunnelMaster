@@ -9,6 +9,9 @@ mod enhance;
 mod feat;
 pub mod ipc;
 mod process;
+mod tunnelmaster_digitalocean;
+mod tunnelmaster_profiles;
+mod tunnelmaster_traffic;
 pub mod utils;
 
 use crate::constants::files;
@@ -271,7 +274,7 @@ pub fn run() -> std::process::ExitCode {
 
             #[cfg(target_os = "macos")]
             if let Some(window) = _app_handle.get_webview_window("main") {
-                let _ = window.set_title("Clash Verge");
+                let _ = window.set_title("TunnelMaster");
             }
         }
 

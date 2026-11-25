@@ -483,6 +483,20 @@ export interface TranslationResources {
         }
         title: string
       }
+      tunnelmaster: {
+        addAiDomains: string
+        chinaDirect: string
+        direct: string
+        directDomains: string
+        domainHint: string
+        import: string
+        imported: string
+        notApplied: string
+        proxyDomains: string
+        rules: string
+        unavailable: string
+        unmatched: string
+      }
     }
     proxies: {
       components: {
@@ -1589,6 +1603,7 @@ export interface TranslationResources {
           noDisney: string
           originalsOnly: string
           pending: string
+          risky: string
           unsupportedRegion: string
           yes: string
         }
@@ -1606,6 +1621,88 @@ export interface TranslationResources {
           title: string
         }
       }
+    }
+    usage: {
+      aboutServer: string
+      accrued: string
+      allowanceNote: string
+      billing: string
+      bucketVolume: string
+      cancel: string
+      chartInstructions: string
+      configure: string
+      confirmRemove: string
+      connected: string
+      coverage: string
+      coverageWarning: string
+      disconnect: string
+      done: string
+      download: string
+      downloadNow: string
+      downloadTotal: string
+      dropletId: string
+      dropletIdHelp: string
+      dropletsFailed: string
+      empty: string
+      fileNotice: string
+      inbound: string
+      inboundEstimate: string
+      keychain: string
+      lastSample: string
+      listWithToken: string
+      loading: string
+      local: string
+      localFile: string
+      localHistory: string
+      localScope: string
+      migrate: string
+      migrateKeychain: string
+      monthOver: string
+      monthRemaining: string
+      monthTitle: string
+      monthUnavailable: string
+      monthUsed: string
+      navigation: string
+      noCoverage: string
+      noDroplets: string
+      nominal: string
+      open: string
+      outbound: string
+      outboundEstimate: string
+      peakConnections: string
+      peakDown: string
+      peakUp: string
+      planUnavailable: string
+      projected: string
+      range: string
+      range14d: string
+      range24h: string
+      range30d: string
+      range365d: string
+      range60m: string
+      range7d: string
+      refresh: string
+      refreshDroplets: string
+      samplingPaused: string
+      save: string
+      saveFailed: string
+      server: string
+      serverHistory: string
+      serverName: string
+      serverSettingsError: string
+      sessions: string
+      settings: string
+      setup: string
+      storage: string
+      title: string
+      token: string
+      tokenHelp: string
+      tokenReplace: string
+      unavailable: string
+      upload: string
+      uploadNow: string
+      uploadTotal: string
+      useExistingToken: string
     }
   }
 }

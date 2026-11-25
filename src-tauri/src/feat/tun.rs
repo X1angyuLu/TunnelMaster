@@ -22,14 +22,18 @@ pub async fn reconcile_startup_tun_availability() {
     // Read fresh state after prior config writes complete.
     let _config_write = Config::lock_config_write().await;
     let tun_enabled = Config::verge().await.data_arc().enable_tun_mode.unwrap_or(false);
-    if !RUN_STATE.state().startup_tun_should_be_disabled(tun_enabled) {
+    #[cfg(target_os = "macos")]
+    let conflicting_route = tun_enabled && crate::core::tunnelmaster_network::check_tun().await.is_err();
+    #[cfg(not(target_os = "macos"))]
+    let conflicting_route = false;
+    if !conflicting_route && !RUN_STATE.state().startup_tun_should_be_disabled(tun_enabled) {
         return;
     }
 
     logging!(
         info,
         Type::Setup,
-        "Service is not installed; turning TUN mode off so the Core can start on Sidecar"
+        "Turning TUN mode off at startup because the service is unavailable or another route is active"
     );
     // Write the preference only: a patch would reach update_config_checked, which with no Core to
     // reload starts one ahead of the rest of startup, and rolls the write back if that fails.

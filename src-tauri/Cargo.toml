@@ -1,10 +1,10 @@
 [package]
 name = "clash-verge"
 version = "2.5.10"
-description = "clash verge"
+description = "TunnelMaster, based on Clash Verge Rev"
 authors = ["zzzgydi", "Tunglies", "wonfen", "MystiPanda"]
 license = "GPL-3.0-only"
-repository = "https://github.com/clash-verge-rev/clash-verge-rev.git"
+repository = "https://github.com/X1angyuLu/TunnelMaster.git"
 default-run = "clash-verge"
 build = "build.rs"
 edition = "2024"
@@ -26,7 +26,7 @@ clippy = ["tauri/test"]
 perf-harness = ["dep:tauri-plugin-wdio-webdriver"]
 
 [package.metadata.bundle]
-identifier = "io.github.clash-verge-rev.clash-verge-rev"
+identifier = "com.x1angyulu.TunnelMaster.verge"
 
 [build-dependencies]
 tauri-build = { version = "2.7.3", features = [] }
@@ -64,6 +64,7 @@ dirs = "7.0.0"
 dunce = "1.0.5"
 nanoid = "0.5"
 chrono = { workspace = true }
+rusqlite = { version = "0.39", features = ["bundled"] }
 boa_engine = "0.22.0"
 percent-encoding = "2.3.2"
 reqwest = { workspace = true }
@@ -98,7 +99,7 @@ tracing = { workspace = true }
 tauri-plugin-devtools = { version = "2.2.2", optional = true }
 tauri-plugin-mihomo = { git = "https://github.com/clash-verge-rev/tauri-plugin-mihomo", rev = "7a03d16f4d39b1bb885b7babe66b9e153e34b615" }
 async-trait = "0.1.92"
-clash_verge_service_ipc = { git = "https://github.com/clash-verge-rev/clash-verge-service-ipc.git", tag = "v2.7.7", version = "2.7.7", features = [
+clash_verge_service_ipc = { path = "../vendor/tunnelmaster-service", version = "2.7.7", features = [
   "client",
 ] }
 arc-swap = "1.9.2"
@@ -120,6 +121,7 @@ libc = "0.2.191"
 clash-verge-signal = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3.7.0"
 tauri-plugin-wdio-webdriver = { version = "=1.5.0", optional = true }
 objc2 = "0.6.5"
 objc2-foundation = { version = "0.3.2", features = [

@@ -30,6 +30,50 @@ export type {
   UnlockItem,
 } from './bindings'
 
+export const tunnelmasterUsage = {
+  localHistory: (range: string) => commands.tunnelmasterLocalHistory(range),
+  open: () => commands.openTunnelmasterUsage(),
+  settings: () => commands.getTunnelmasterDoSettings(),
+  migrateCredentials: () => commands.migrateTunnelmasterDoCredentials(),
+  saveCredentials: (
+    dropletId: string,
+    token: string,
+    storage: 'keychain' | 'localFile',
+  ) => commands.saveTunnelmasterDoCredentials(dropletId, token, storage),
+  listDroplets: (token?: string, dropletId?: string) =>
+    commands.listTunnelmasterDoDroplets(token ?? null, dropletId ?? null),
+  selectDroplet: (dropletId: string) =>
+    commands.selectTunnelmasterDoDroplet(dropletId),
+  report: (days: number, dropletId: string) =>
+    commands.getTunnelmasterDoReport(days, dropletId),
+  monthly: (dropletId: string) =>
+    commands.getTunnelmasterDoMonthlyTransfer(dropletId),
+  clearCredentials: () => commands.clearTunnelmasterDoCredentials(),
+}
+
+export type UsageLocalHistory = Awaited<
+  ReturnType<typeof tunnelmasterUsage.localHistory>
+>
+export type UsageDoSettings = Awaited<
+  ReturnType<typeof tunnelmasterUsage.settings>
+>
+export type UsageDroplet = Awaited<
+  ReturnType<typeof tunnelmasterUsage.listDroplets>
+>[number]
+export type UsageDoReport = Awaited<ReturnType<typeof tunnelmasterUsage.report>>
+export type UsageDoMonthly = Awaited<
+  ReturnType<typeof tunnelmasterUsage.monthly>
+>
+
+export type { TunnelMasterRules } from './bindings'
+
+export const isTunnelMasterProfile = (id?: string | null): boolean =>
+  id?.startsWith('Ltmwg-') ?? false
+
+export const importTunnelMasterWireguard = commands.importTunnelmasterWireguard
+export const getTunnelMasterRules = commands.getTunnelmasterRules
+export const saveTunnelMasterRules = commands.saveTunnelmasterRules
+
 export async function copyClashEnv() {
   return commands.copyClashEnv()
 }

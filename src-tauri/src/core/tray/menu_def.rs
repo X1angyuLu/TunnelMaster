@@ -56,6 +56,8 @@ pub(crate) enum TrayAction {
     TunMode,
     MainWindow,
     TrayMenu,
+    #[cfg(target_os = "macos")]
+    Usage,
     Unknown,
 }
 
@@ -66,6 +68,8 @@ impl From<&str> for TrayAction {
             "tun_mode" => Self::TunMode,
             "main_window" => Self::MainWindow,
             "tray_menu" => Self::TrayMenu,
+            #[cfg(target_os = "macos")]
+            "usage" => Self::Usage,
             _ => Self::Unknown,
         }
     }

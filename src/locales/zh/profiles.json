@@ -1,4 +1,18 @@
 {
+  "tunnelmaster": {
+    "import": "导入 WireGuard",
+    "imported": "已添加 WireGuard 配置，选中即可启用。",
+    "rules": "TunnelMaster 分流",
+    "unmatched": "未匹配流量",
+    "direct": "直连",
+    "chinaDirect": "中国大陆 IP 直连",
+    "directDomains": "直连域名",
+    "proxyDomains": "走 WireGuard 的域名",
+    "domainHint": "每行一个域名。配置文件中的其他自定义规则优先。",
+    "addAiDomains": "添加 OpenAI 和 Claude 域名",
+    "unavailable": "此配置不支持 TunnelMaster 分流设置。",
+    "notApplied": "分流设置未能应用，你可以重试。"
+  },
   "page": {
     "actions": {
       "updateAll": "更新所有订阅",

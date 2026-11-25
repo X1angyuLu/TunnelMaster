@@ -18,6 +18,8 @@ pub mod service;
 pub mod sysopt;
 pub mod timer;
 pub mod tray;
+#[cfg(target_os = "macos")]
+pub(crate) mod tunnelmaster_network;
 pub mod updater;
 pub mod validate;
 pub mod win_uwp;

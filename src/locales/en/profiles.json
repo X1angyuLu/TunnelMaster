@@ -1,4 +1,18 @@
 {
+  "tunnelmaster": {
+    "import": "Import WireGuard",
+    "imported": "WireGuard profile added. Select it to activate.",
+    "rules": "TunnelMaster routing",
+    "unmatched": "Unmatched traffic",
+    "direct": "Direct",
+    "chinaDirect": "Route mainland China IPs directly",
+    "directDomains": "Direct domains",
+    "proxyDomains": "WireGuard domains",
+    "domainHint": "One domain per line. Custom rules in the profile take priority.",
+    "addAiDomains": "Add OpenAI and Claude domains",
+    "unavailable": "TunnelMaster routing is unavailable for this profile.",
+    "notApplied": "The routing changes could not be applied. You can try again."
+  },
   "page": {
     "actions": {
       "updateAll": "Update All Profiles",

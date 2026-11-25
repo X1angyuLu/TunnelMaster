@@ -17,12 +17,11 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: tunnelmaster-macos-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
   tun:
+    concurrency:
+      group: tunnelmaster-tun-${{ github.ref }}
+      cancel-in-progress: false
     runs-on: macos-15
     timeout-minutes: 25
     env:

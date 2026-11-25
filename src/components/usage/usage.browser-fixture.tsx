@@ -299,15 +299,19 @@ async function run() {
   )
 }
 
-void run().then(
+export const done = run().then(
   () => {
     document.documentElement.dataset.result = 'passed'
+    return { passed: true }
   },
   (error: unknown) => {
+    const failure =
+      error instanceof Error ? (error.stack ?? error.message) : String(error)
     document.documentElement.dataset.result = 'failed'
     const details = document.createElement('pre')
     details.id = 'failure'
-    details.textContent = String(error)
+    details.textContent = failure
     document.body.append(details)
+    return { passed: false, failure }
   },
 )

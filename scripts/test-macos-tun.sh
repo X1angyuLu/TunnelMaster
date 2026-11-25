@@ -27,15 +27,15 @@ installed="false"
 
 cleanup() {
   status=$?
+  if [[ "$status" != 0 ]]; then
+    route -n get -inet "$fixture_address" || true
+    sudo -n launchctl print "system/$service_id" || true
+  fi
   if [[ -n "$CLASH_VERGE_TEST_SESSION_GENERATION" ]]; then
     "$driver" stop || true
   fi
   if [[ "$installed" == true ]]; then
-    sudo -n "$tools/tunnelmaster-service-uninstall"
-  fi
-  if [[ "$status" != 0 ]]; then
-    route -n get -inet "$fixture_address" || true
-    sudo -n launchctl print "system/$service_id" || true
+    sudo -n "$tools/tunnelmaster-service-uninstall" || true
   fi
   rm -rf "$scratch"
 }
@@ -80,10 +80,12 @@ hash="$(shasum -a 256 "$core" | awk '{ print $1 }')"
 installed="true"
 sudo -n "$tools/tunnelmaster-service-install" --install-service --install-core "$core" --sha256 "$hash"
 sudo -n launchctl print "system/$service_id" >/dev/null
-test -x "$installed_core"
+sudo -n /bin/test -x "$installed_core"
+echo "TunnelMaster helper is registered and can read the executable it staged."
 
 CLASH_VERGE_TEST_SESSION_GENERATION="$("$driver" start-runtime "$scratch/fixture.yaml" "$installed_core")"
 [[ "$CLASH_VERGE_TEST_SESSION_GENERATION" =~ ^[0-9]+$ ]]
+echo "TunnelMaster helper accepted the production IPC request."
 
 for attempt in {1..30}; do
   fixture_network="$(route_interface "$fixture_address")"

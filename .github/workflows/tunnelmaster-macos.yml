@@ -39,6 +39,16 @@ jobs:
           cache: pnpm
       - name: Install the pinned Rust toolchain
         run: rustup show active-toolchain
+      - name: Restore Rust build dependencies
+        id: rust-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: tm-macos-arm64-${{ hashFiles('Cargo.lock', 'vendor/tunnelmaster-service/Cargo.lock', 'rust-toolchain.toml') }}-${{ github.sha }}
+          restore-keys: tm-macos-arm64-${{ hashFiles('Cargo.lock', 'vendor/tunnelmaster-service/Cargo.lock', 'rust-toolchain.toml') }}-
       - name: Build TunnelMaster and the privileged service
         run: |
           pnpm install --frozen-lockfile
@@ -46,6 +56,15 @@ jobs:
           pnpm tauri build --debug --bundles app
           codesign --force --deep --sign - target/debug/bundle/macos/TunnelMaster.app
           codesign --verify --deep --strict target/debug/bundle/macos/TunnelMaster.app
+      - name: Save Rust build dependencies
+        if: steps.rust-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ steps.rust-cache.outputs.cache-primary-key }}
       - name: Exercise production service IPC and the real TUN interface
         run: |
           bash scripts/test-macos-tun.sh target/debug/bundle/macos/TunnelMaster.app \

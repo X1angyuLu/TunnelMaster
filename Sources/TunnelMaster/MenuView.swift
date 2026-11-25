@@ -46,9 +46,14 @@ struct MenuView: View {
 
     private var overview: some View {
         let request = metricsRequest
+        let monthlyRequest = DigitalOceanMonthlyTransferRequest(dropletID: serverSource.dropletID,
+                                                               refresh: request.refresh)
         return VStack(alignment: .leading, spacing: 10) {
             header
             connectionCard
+            if monthlyRequest.dropletID != nil {
+                DigitalOceanMonthlyTransferCard(source: serverSource, compact: true)
+            }
             metricsToolbar
             metricsCard
                 .environment(\.menuChartDetailController, detailController)
@@ -112,6 +117,12 @@ struct MenuView: View {
             detailController.dismiss()
         }
         .task(id: request) { await loadMetrics(request) }
+        .task(id: monthlyRequest) {
+            guard monthlyRequest.dropletID != nil else { return }
+            let force = monthlyRequest.refresh != metricsView.completedMonthlyRefresh
+            metricsView.completedMonthlyRefresh = monthlyRequest.refresh
+            await serverSource.loadMonthlyTransfer(force: force)
+        }
     }
 
     private var header: some View {
@@ -247,7 +258,7 @@ struct MenuView: View {
                     }
                     .buttonStyle(.borderless)
                     .font(.caption.weight(.medium))
-                    .disabled(menuStats.isLoading)
+                    .disabled(menuStats.isLoading || serverSource.isLoadingMonthlyTransfer)
                     .help("刷新服务器流量")
                     .accessibilityLabel("刷新服务器流量")
                 }
@@ -599,6 +610,7 @@ private final class MenuMetricsState: ObservableObject {
     @Published var refresh = 0
     @Published var completedScope: MenuMetricsScope?
     var completedRefresh = 0
+    var completedMonthlyRefresh = 0
 }
 
 @MainActor

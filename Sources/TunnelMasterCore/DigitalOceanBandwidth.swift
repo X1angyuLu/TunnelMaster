@@ -65,6 +65,18 @@ public struct DigitalOceanBandwidthReport: Sendable {
     public let until: Date
 }
 
+public struct DigitalOceanMonthlyTransfer: Sendable {
+    public let monthStart: Date
+    public let asOf: Date
+    public let outboundGiB: Double?
+    public let coverage: Double?
+    public let planGiB: Double?
+    public let accruedGiB: Double?
+    /// Projected month-end allowance less observed outbound usage, when coverage is sufficient.
+    public let remainingGiB: Double?
+    public let projectedAllowanceGiB: Double?
+}
+
 public enum DigitalOceanBandwidthError: LocalizedError, Equatable, Sendable {
     case invalidDropletID
     case invalidToken
@@ -113,6 +125,74 @@ public struct DigitalOceanBandwidthClient: Sendable {
     }
 
     public func report(dropletID: String, token: String, from: Date, until: Date) async throws -> DigitalOceanBandwidthReport {
+        let credential = try Self.credentials(dropletID: dropletID, token: token)
+        let query = try BandwidthQuery(dropletID: credential.id, from: from, until: until)
+        async let inbound = fetch(query, direction: .inbound, token: credential.token)
+        async let outbound = fetch(query, direction: .outbound, token: credential.token)
+        return try await DigitalOceanBandwidthReport(inbound: inbound, outbound: outbound, from: from, until: until)
+    }
+
+    public func monthlyTransfer(dropletID: String, token: String, now: Date = .now) async throws
+        -> DigitalOceanMonthlyTransfer {
+        let credential = try Self.credentials(dropletID: dropletID, token: token)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        guard now.timeIntervalSince1970 >= 0, Int64(exactly: ceil(now.timeIntervalSince1970)) != nil,
+              let month = calendar.dateInterval(of: .month, for: now) else {
+            throw DigitalOceanBandwidthError.invalidWindow
+        }
+
+        let metadata: DropletMetadata?
+        do {
+            metadata = try await dropletMetadata(id: credential.id, token: credential.token, now: now)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            try Task.checkCancellation()
+            metadata = nil
+        }
+        let first = max(month.start, metadata?.createdAt ?? month.start)
+        let elapsed = now.timeIntervalSince(first)
+        var cursor = first
+        var bytes = 0.0
+        var coveredSeconds = 0.0
+        while cursor < now {
+            try Task.checkCancellation()
+            let end = min(now, cursor.addingTimeInterval(6 * 86_400))
+            // Overlap neighboring requests so a slice boundary does not discard observed rates.
+            // Integrate the nonoverlapping slices separately so no time is counted twice.
+            let query = try BandwidthQuery(
+                dropletID: credential.id,
+                from: max(first, cursor.addingTimeInterval(-1_800)),
+                until: min(now, end.addingTimeInterval(1_800))
+            )
+            let series = try await fetch(query, direction: .outbound, token: credential.token)
+            let estimate = series.estimate(in: DateInterval(start: cursor, end: end))
+            if let amount = estimate.estimatedBytes {
+                bytes += amount
+                coveredSeconds += estimate.coveredSeconds
+            }
+            cursor = end
+        }
+        try Task.checkCancellation()
+        let outboundGiB = coveredSeconds > 0 && bytes.isFinite ? bytes / 1_073_741_824 : nil
+        let coverage = elapsed > 0 ? min(1, coveredSeconds / elapsed) : nil
+        let accrued = metadata?.plan?.allowance(during: elapsed)
+        let projected = metadata?.plan?.allowance(during: month.end.timeIntervalSince(first))
+        let remaining: Double?
+        if let outboundGiB, let coverage, coverage >= 0.95, let projected {
+            remaining = projected - outboundGiB
+        } else {
+            remaining = nil
+        }
+        return DigitalOceanMonthlyTransfer(
+            monthStart: month.start, asOf: now, outboundGiB: outboundGiB, coverage: coverage,
+            planGiB: metadata?.plan?.includedGiB, accruedGiB: accrued, remainingGiB: remaining,
+            projectedAllowanceGiB: projected
+        )
+    }
+
+    private static func credentials(dropletID: String, token: String) throws -> (id: String, token: String) {
         let enteredID = dropletID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard enteredID.utf8.allSatisfy({ (48...57).contains($0) }),
               let identifier = UInt64(enteredID), identifier > 0 else {
@@ -122,32 +202,15 @@ public struct DigitalOceanBandwidthClient: Sendable {
         guard !authorization.isEmpty, authorization.utf8.allSatisfy({ (33...126).contains($0) }) else {
             throw DigitalOceanBandwidthError.invalidToken
         }
-        guard from < until,
-              let start = Int64(exactly: floor(from.timeIntervalSince1970)), start >= 0,
-              let end = Int64(exactly: ceil(until.timeIntervalSince1970)) else {
-            throw DigitalOceanBandwidthError.invalidWindow
-        }
-
-        let window = DateInterval(start: from, end: until)
-        let query = BandwidthQuery(dropletID: String(identifier), start: start, end: end, window: window)
-        async let inbound = fetch(query, direction: .inbound, token: authorization)
-        async let outbound = fetch(query, direction: .outbound, token: authorization)
-        return try await DigitalOceanBandwidthReport(inbound: inbound, outbound: outbound, from: from, until: until)
+        return (String(identifier), authorization)
     }
 
-    private func fetch(_ query: BandwidthQuery, direction: Direction, token: String) async throws
-        -> DigitalOceanBandwidthSeries {
+    private func request(path: String, queryItems: [URLQueryItem]? = nil, token: String) async throws -> Data {
         var url = URLComponents()
         url.scheme = "https"
         url.host = "api.digitalocean.com"
-        url.path = "/v2/monitoring/metrics/droplet/bandwidth"
-        url.queryItems = [
-            URLQueryItem(name: "host_id", value: query.dropletID),
-            URLQueryItem(name: "interface", value: "public"),
-            URLQueryItem(name: "direction", value: direction.rawValue),
-            URLQueryItem(name: "start", value: String(query.start)),
-            URLQueryItem(name: "end", value: String(query.end))
-        ]
+        url.path = path
+        url.queryItems = queryItems
         guard let endpoint = url.url else { throw DigitalOceanBandwidthError.invalidWindow }
         var request = URLRequest(url: endpoint)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -171,6 +234,18 @@ public struct DigitalOceanBandwidthClient: Sendable {
         case 429: throw DigitalOceanBandwidthError.rateLimited
         default: throw DigitalOceanBandwidthError.httpStatus(http.statusCode)
         }
+        return data
+    }
+
+    private func fetch(_ query: BandwidthQuery, direction: Direction, token: String) async throws
+        -> DigitalOceanBandwidthSeries {
+        let data = try await request(path: "/v2/monitoring/metrics/droplet/bandwidth", queryItems: [
+            URLQueryItem(name: "host_id", value: query.dropletID),
+            URLQueryItem(name: "interface", value: "public"),
+            URLQueryItem(name: "direction", value: direction.rawValue),
+            URLQueryItem(name: "start", value: String(query.start)),
+            URLQueryItem(name: "end", value: String(query.end))
+        ], token: token)
         guard let matrix = try? JSONDecoder().decode(BandwidthResponse.self, from: data),
               matrix.status == "success", matrix.data.resultType == "matrix",
               matrix.data.result.count <= 1 else {
@@ -185,6 +260,24 @@ public struct DigitalOceanBandwidthClient: Sendable {
         }
         return DigitalOceanBandwidthSeries(samples: [], observations: [], window: query.window)
     }
+
+    private func dropletMetadata(id: String, token: String, now: Date) async throws -> DropletMetadata {
+        let data = try await request(path: "/v2/droplets/\(id)", token: token)
+        guard let detail = try? JSONDecoder().decode(DropletResponse.self, from: data).droplet,
+              String(detail.id) == id,
+              let createdAt = (try? Date.ISO8601FormatStyle().parse(detail.createdAt))
+                ?? (try? Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(detail.createdAt)),
+              createdAt <= now else {
+            throw DigitalOceanBandwidthError.invalidResponse
+        }
+        let plan = detail.size.flatMap { size -> DropletMetadata.Plan? in
+            // DigitalOcean plan tables express an advertised 1 TB transfer allotment as 1,000 GiB.
+            let includedGiB = size.transfer * 1_000
+            guard !size.slug.isEmpty, includedGiB.isFinite, includedGiB >= 0 else { return nil }
+            return DropletMetadata.Plan(includedGiB: includedGiB, uncapped: size.slug.hasPrefix("s5-") || size.slug.hasPrefix("g5-"))
+        }
+        return DropletMetadata(createdAt: createdAt, plan: plan)
+    }
 }
 
 private enum Direction: String, Sendable {
@@ -196,6 +289,53 @@ private struct BandwidthQuery: Sendable {
     let start: Int64
     let end: Int64
     let window: DateInterval
+
+    init(dropletID: String, from: Date, until: Date) throws {
+        guard from < until,
+              let start = Int64(exactly: floor(from.timeIntervalSince1970)), start >= 0,
+              let end = Int64(exactly: ceil(until.timeIntervalSince1970)) else {
+            throw DigitalOceanBandwidthError.invalidWindow
+        }
+        self.dropletID = dropletID
+        self.start = start
+        self.end = end
+        self.window = DateInterval(start: from, end: until)
+    }
+}
+
+private struct DropletResponse: Decodable {
+    struct Droplet: Decodable {
+        struct Size: Decodable {
+            let slug: String
+            let transfer: Double
+        }
+
+        let id: UInt64
+        let createdAt: String
+        let size: Size?
+
+        enum CodingKeys: String, CodingKey {
+            case id, size
+            case createdAt = "created_at"
+        }
+    }
+
+    let droplet: Droplet
+}
+
+private struct DropletMetadata {
+    struct Plan {
+        let includedGiB: Double
+        let uncapped: Bool
+
+        func allowance(during seconds: TimeInterval) -> Double {
+            let ratio = seconds / (28 * 86_400)
+            return includedGiB * (uncapped ? ratio : min(1, ratio))
+        }
+    }
+
+    let createdAt: Date
+    let plan: Plan?
 }
 
 private final class RejectRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {

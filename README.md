@@ -37,6 +37,8 @@
 
 「流量统计」里的 DigitalOcean 来源读取指定 Droplet 的公网入站和出站速率，同一台服务器上各设备的流量都会计入。连接时输入 Droplet ID 和具有 `monitoring:read` 权限的 DigitalOcean API 令牌。默认使用 macOS 钥匙串，也可以在「DigitalOcean → 设置」中选择「本机文件」。已有配置可直接把令牌从钥匙串复制到本机文件，macOS 可能会要求授权这次读取。本机文件位于应用数据目录，随本机配置保留，访问权限限定为当前 macOS 用户。同一用户运行的程序可读取其中的明文令牌。图表直接使用 [Monitoring API](https://docs.digitalocean.com/reference/api/reference/monitoring/#get-droplet-bandwidth-metrics) 返回的采样，进出站用量按已覆盖的时段估算。结算用量和团队流量池在 [DigitalOcean Billing](https://cloud.digitalocean.com/account/billing) 查看。
 
+配置 DigitalOcean 后，菜单和流量统计页会显示当前 UTC 自然月的公网出站估算、已累积额度及预计余量。预计余量按服务器在当前套餐下保留到月底计算。出站采样覆盖低于 95% 时仅显示可估算的用量。DigitalOcean 实际用量和额度按团队合并，具体计费规则见其[带宽账单说明](https://docs.digitalocean.com/platform/billing/bandwidth/)。
+
 安装应用后，也可以用 `open 'tunnelmaster://statistics/digitalocean'` 打开 DigitalOcean 统计页。
 
 如果程序异常结束，重新打开应用并选择「恢复系统代理」。遇到其他代理应用在会话中修改设置时，TunnelMaster 会保留它修改的代理组。

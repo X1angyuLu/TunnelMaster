@@ -30,6 +30,9 @@ final class DigitalOceanSource: ObservableObject {
     @Published private(set) var lastUpdated: Date?
     @Published private(set) var isLoading = false
     @Published private(set) var errorMessage: String?
+    @Published private(set) var monthlyTransfer: DigitalOceanMonthlyTransfer?
+    @Published private(set) var isLoadingMonthlyTransfer = false
+    @Published private(set) var monthlyTransferError: String?
 
     private let defaults = UserDefaults.standard
     private let client = DigitalOceanBandwidthClient()
@@ -41,6 +44,8 @@ final class DigitalOceanSource: ObservableObject {
     private var snapshots: [Int: Snapshot] = [:]
     private var pending: [Int: Task<Snapshot, Error>] = [:]
     private var credentialRevision = UUID()
+    private var pendingMonthlyTransfer: Task<DigitalOceanMonthlyTransfer, Error>?
+    private var monthlyTransferFetchedAt: Date?
 
     init(storage: URL) {
         localCredentialFile = MonitoringLocalFile(directory: storage)
@@ -136,11 +141,7 @@ final class DigitalOceanSource: ObservableObject {
             return snapshot
         }
 
-        let credential = switch credentialStorage {
-        case .keychain: try MonitoringKeychain.load()
-        case .localFile: try localCredentialFile.load()
-        }
-        guard credential.dropletID == dropletID else { throw DigitalOceanBandwidthError.invalidDropletID }
+        let credential = try storedCredential(dropletID: dropletID)
         let request = Task { Snapshot(report: try await fetch(credential, days: days), fetchedAt: .now) }
         pending[days] = request
         defer {
@@ -152,11 +153,64 @@ final class DigitalOceanSource: ObservableObject {
         return snapshot
     }
 
+    func loadMonthlyTransfer(force: Bool = false) async {
+        guard let dropletID, !Task.isCancelled, pendingMonthlyTransfer == nil else { return }
+        let now = Date()
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .gmt
+        if let monthlyTransfer, !calendar.isDate(now, equalTo: monthlyTransfer.monthStart, toGranularity: .month) {
+            self.monthlyTransfer = nil
+            monthlyTransferFetchedAt = nil
+        }
+        if !force, let fetchedAt = monthlyTransferFetchedAt, now.timeIntervalSince(fetchedAt) < 300 { return }
+
+        monthlyTransferError = nil
+        isLoadingMonthlyTransfer = true
+        let revision = credentialRevision
+        defer {
+            if credentialRevision == revision {
+                pendingMonthlyTransfer = nil
+                isLoadingMonthlyTransfer = false
+            }
+        }
+        do {
+            let credential = try storedCredential(dropletID: dropletID)
+            let request = Task { [client] in
+                try await client.monthlyTransfer(dropletID: credential.dropletID, token: credential.token, now: now)
+            }
+            pendingMonthlyTransfer = request
+            let result = try await request.value
+            guard credentialRevision == revision else { return }
+            monthlyTransfer = result
+            monthlyTransferFetchedAt = .now
+        } catch is CancellationError {
+            return
+        } catch {
+            guard credentialRevision == revision else { return }
+            monthlyTransferError = error.localizedDescription
+        }
+    }
+
+    private func storedCredential(dropletID: String) throws -> MonitoringCredential {
+        let credential = switch credentialStorage {
+        case .keychain: try MonitoringKeychain.load()
+        case .localFile: try localCredentialFile.load()
+        }
+        guard credential.dropletID == dropletID else { throw DigitalOceanBandwidthError.invalidDropletID }
+        return credential
+    }
+
     private func clearSnapshots() {
         credentialRevision = UUID()
         pending.values.forEach { $0.cancel() }
         pending.removeAll()
         snapshots.removeAll()
+        pendingMonthlyTransfer?.cancel()
+        pendingMonthlyTransfer = nil
+        monthlyTransferFetchedAt = nil
+        monthlyTransfer = nil
+        monthlyTransferError = nil
+        isLoadingMonthlyTransfer = false
     }
 
     private func saveConfiguration(dropletID: String, storage: DigitalOceanCredentialStorage) {

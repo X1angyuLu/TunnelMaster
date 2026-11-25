@@ -25,12 +25,16 @@ struct DigitalOceanUsageView: View {
     }
 
     var body: some View {
+        let monthlyRequest = DigitalOceanMonthlyTransferRequest(
+            dropletID: state.isEditing ? nil : source.dropletID, refresh: state.refresh
+        )
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 if source.dropletID == nil || state.isEditing {
                     configuration
                 } else if let id = source.dropletID {
                     toolbar(id: id)
+                    DigitalOceanMonthlyTransferCard(source: source)
                     if let message = source.errorMessage {
                         errorNotice(message)
                     }
@@ -53,6 +57,12 @@ struct DigitalOceanUsageView: View {
                let lastUpdated = source.lastUpdated, lastUpdated.timeIntervalSinceNow > -60 { return }
             state.completedRefresh = state.refresh
             await source.load(days: range.rawValue)
+        }
+        .task(id: monthlyRequest) {
+            guard monthlyRequest.dropletID != nil else { return }
+            let force = monthlyRequest.refresh != state.completedMonthlyRefresh
+            state.completedMonthlyRefresh = monthlyRequest.refresh
+            await source.loadMonthlyTransfer(force: force)
         }
     }
 
@@ -80,7 +90,7 @@ struct DigitalOceanUsageView: View {
             } label: {
                 Label("刷新", systemImage: "arrow.clockwise")
             }
-            .disabled(source.isLoading)
+            .disabled(source.isLoading || source.isLoadingMonthlyTransfer)
 
             Button {
                 state.dropletID = id
@@ -342,6 +352,119 @@ struct DigitalOceanUsageView: View {
         let range: DigitalOceanUsageRange
         let refresh: Int
     }
+}
+
+struct DigitalOceanMonthlyTransferRequest: Equatable {
+    let dropletID: String?
+    let refresh: Int
+}
+
+@MainActor
+struct DigitalOceanMonthlyTransferCard: View {
+    @ObservedObject var source: DigitalOceanSource
+    var compact = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: compact ? 5 : 11) {
+            HStack(spacing: 8) {
+                Text("本月出站流量")
+                    .font(compact ? .caption.weight(.semibold) : .headline)
+                Text("单台 Droplet 估算")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                if source.isLoadingMonthlyTransfer {
+                    ProgressView().controlSize(.small)
+                        .accessibilityLabel("正在更新本月出站流量")
+                }
+            }
+            if let transfer = source.monthlyTransfer {
+                values(transfer)
+            } else if source.isLoadingMonthlyTransfer {
+                secondary("正在读取本月监控数据…")
+            } else if source.monthlyTransferError == nil {
+                secondary("暂无本月监控数据")
+            }
+            if let error = source.monthlyTransferError {
+                if compact {
+                    secondary(source.monthlyTransfer == nil ? "本月数据读取失败" : "本月数据更新失败，显示上次结果")
+                        .help(error)
+                } else {
+                    Label(error, systemImage: "exclamationmark.circle")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .modifier(DigitalOceanPanel(inset: compact ? 8 : 13))
+    }
+
+    @ViewBuilder
+    private func values(_ transfer: DigitalOceanMonthlyTransfer) -> some View {
+        let remainingLabel = (transfer.remainingGiB ?? 0) < 0 ? "预计超出" : "预计本月余量"
+
+        if compact {
+            HStack(spacing: 8) {
+                Text("本月已用 \(gib(transfer.outboundGiB))")
+                Spacer(minLength: 0)
+                Text("\(remainingLabel) \(gib(transfer.remainingGiB.map(abs)))")
+            }
+            .font(.caption.monospacedDigit())
+            secondary("UTC 月度 · \(coverageLabel(transfer.coverage))")
+        } else {
+            HStack(spacing: 24) {
+                metric("本月已用", gib(transfer.outboundGiB))
+                metric("已累积额度", gib(transfer.accruedGiB))
+                metric(remainingLabel, gib(transfer.remainingGiB.map(abs)))
+            }
+            if let used = transfer.outboundGiB, let projected = transfer.projectedAllowanceGiB,
+               transfer.remainingGiB != nil, projected > 0 {
+                ProgressView(value: min(max(used / projected, 0), 1))
+                    .accessibilityLabel("已用出站流量占预计月底总额的比例")
+            }
+            if let plan = transfer.planGiB {
+                secondary("套餐标称额度 \(gib(plan)) · 预计月底总额 \(gib(transfer.projectedAllowanceGiB))")
+            }
+            secondary("\(Self.utcStamp.string(from: transfer.monthStart)) 至 \(Self.utcStamp.string(from: transfer.asOf)) UTC · \(coverageLabel(transfer.coverage))")
+            if let coverage = transfer.coverage, coverage < 0.95, transfer.outboundGiB != nil {
+                secondary("采样覆盖不足 95%，暂不显示预计余量。")
+            }
+            secondary("预计额度按当前套餐、月底前持续保留此 Droplet 计算。实际计费按团队合并，以 DigitalOcean 账单为准。")
+        }
+    }
+
+    private func metric(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            secondary(title)
+            Text(value)
+                .font(.system(.title3, design: .rounded, weight: .semibold).monospacedDigit())
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+    }
+
+    private func secondary(_ text: String) -> some View {
+        Text(text).font(.caption).foregroundStyle(.secondary)
+    }
+
+    private func gib(_ value: Double?) -> String {
+        guard let value, value.isFinite else { return "—" }
+        return "\(value.formatted(.number.precision(.fractionLength(0...2)))) GiB"
+    }
+
+    private func coverageLabel(_ coverage: Double?) -> String {
+        guard let coverage, coverage > 0 else { return "无有效出站采样" }
+        return "采样覆盖 \(coverage.formatted(.percent.precision(.fractionLength(0...1))))"
+    }
+
+    private static let utcStamp: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "MM-dd HH:mm"
+        return formatter
+    }()
 }
 
 @MainActor
@@ -651,6 +774,7 @@ private final class DigitalOceanUsageState: ObservableObject {
     @Published var credentialStorage: DigitalOceanCredentialStorage
     @Published var refresh = 0
     var completedRefresh = 0
+    var completedMonthlyRefresh = 0
 
     init(storage: DigitalOceanCredentialStorage) {
         credentialStorage = storage

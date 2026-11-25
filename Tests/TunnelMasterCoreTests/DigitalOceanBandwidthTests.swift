@@ -104,6 +104,79 @@ struct DigitalOceanBandwidthTests {
         }
     }
 
+    @Test func monthUsesCreationDateAndSignedProjectedRemainder() async throws {
+        let created = try Date.ISO8601FormatStyle().parse("2026-11-26T11:00:00Z")
+        let now = created.addingTimeInterval(3600)
+        let client = monthlyClient(metadata: """
+        {"droplet":{"id":123,"created_at":"2026-11-26T11:00:00Z","size":{"slug":"s-1vcpu-1gb","transfer":1}}}
+        """) { start, end in
+            #expect(start == Int(created.timeIntervalSince1970))
+            #expect(end == Int(now.timeIntervalSince1970))
+            return Self.monthlySamples(start: start, end: end, mbps: 1000, cadence: 600)
+        }
+        let usage = try await client.monthlyTransfer(dropletID: "123", token: "fixture-token", now: now)
+        #expect(usage.monthStart == (try Date.ISO8601FormatStyle().parse("2026-11-01T00:00:00Z")))
+        #expect(usage.asOf == now)
+        #expect(usage.coverage == 1)
+        #expect(usage.planGiB == 1000)
+        let accrued = try #require(usage.accruedGiB)
+        let projected = try #require(usage.projectedAllowanceGiB)
+        let outbound = try #require(usage.outboundGiB)
+        let remaining = try #require(usage.remainingGiB)
+        #expect(abs(accrued - (1000.0 / 672)) < 0.001)
+        #expect(abs(projected - (1000.0 * 109 / 672)) < 0.001)
+        #expect(abs(outbound - (450_000_000_000.0 / 1_073_741_824)) < 0.001)
+        #expect(remaining == projected - outbound && remaining < 0)
+    }
+
+    @Test func monthClipsOverlappingSlicesAndReportsPartialCoverage() async throws {
+        let monthStart = try Date.ISO8601FormatStyle().parse("2026-11-01T00:00:00Z")
+        let now = monthStart.addingTimeInterval(21 * 86_400)
+        let missingSlice = Int(monthStart.timeIntervalSince1970) + 6 * 86_400 - 1_800
+        let client = monthlyClient(metadata: """
+        {"droplet":{"id":123,"created_at":"2026-10-01T00:00:00Z","size":{"slug":"s-1vcpu-1gb","transfer":1}}}
+        """) { start, end in
+            #expect(end - start <= 7 * 86_400)
+            if start == missingSlice { return Self.matrix() }
+            return Self.monthlySamples(start: start, end: end, mbps: 1, cadence: 900)
+        }
+        let usage = try await client.monthlyTransfer(dropletID: "123", token: "fixture-token", now: now)
+        #expect(usage.coverage == 15.0 / 21)
+        #expect(usage.outboundGiB == (15.0 * 86_400 * 125_000 / 1_073_741_824))
+        #expect(usage.accruedGiB == 750)
+        #expect(usage.projectedAllowanceGiB == 1000)
+        #expect(usage.remainingGiB == nil)
+    }
+
+    @Test func unavailableMetadataDoesNotHideUsageAndRolloverDoesNotQueryEmptyRange() async throws {
+        let monthStart = try Date.ISO8601FormatStyle().parse("2026-12-01T00:00:00Z")
+        let client = monthlyClient(status: 403, metadata: "{}") { start, end in
+            #expect(start == Int(monthStart.timeIntervalSince1970))
+            #expect(end > start)
+            return Self.monthlySamples(start: start, end: end, mbps: 0, cadence: 600)
+        }
+        let usage = try await client.monthlyTransfer(
+            dropletID: "123", token: "fixture-token", now: monthStart.addingTimeInterval(3600)
+        )
+        #expect(usage.outboundGiB == 0)
+        #expect(usage.coverage == 1)
+        #expect(usage.planGiB == nil && usage.remainingGiB == nil && usage.projectedAllowanceGiB == nil)
+        let rollover = try await client.monthlyTransfer(dropletID: "123", token: "fixture-token", now: monthStart)
+        #expect(rollover.outboundGiB == nil && rollover.coverage == nil)
+    }
+
+    @Test func v5MonthAllowanceDoesNotCapAtTwentyEightDays() async throws {
+        let client = monthlyClient(metadata: """
+        {"droplet":{"id":123,"created_at":"2026-10-01T00:00:00.000Z","size":{"slug":"g5-1vcpu-8gb","transfer":2}}}
+        """) { _, _ in Self.matrix() }
+        let now = try Date.ISO8601FormatStyle().parse("2026-12-31T00:00:00Z")
+        let usage = try await client.monthlyTransfer(dropletID: "123", token: "fixture-token", now: now)
+        #expect(usage.planGiB == 2000)
+        #expect(usage.accruedGiB == 2000.0 * (30.0 / 28))
+        #expect(usage.projectedAllowanceGiB == 2000.0 * (31.0 / 28))
+        #expect(usage.outboundGiB == nil && usage.coverage == 0 && usage.remainingGiB == nil)
+    }
+
     private func query(_ client: DigitalOceanBandwidthClient) async throws -> DigitalOceanBandwidthReport {
         try await client.report(
             dropletID: "123", token: "fixture-token",
@@ -126,6 +199,38 @@ struct DigitalOceanBandwidthTests {
             let response = try #require(HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil))
             return (Data(try responder(request, direction).utf8), response)
         })
+    }
+
+    private func monthlyClient(
+        status: Int = 200, metadata: String, samples: @escaping @Sendable (Int, Int) -> String
+    ) -> DigitalOceanBandwidthClient {
+        DigitalOceanBandwidthClient(transport: { request in
+            let url = try #require(request.url)
+            #expect(url.host == "api.digitalocean.com" && url.scheme == "https")
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer fixture-token")
+            let isMetadata = url.path == "/v2/droplets/123"
+            let body: String
+            if isMetadata {
+                body = metadata
+            } else {
+                #expect(url.path == "/v2/monitoring/metrics/droplet/bandwidth")
+                let items = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
+                let params = Dictionary(uniqueKeysWithValues: items.map { ($0.name, $0.value ?? "") })
+                #expect(params["interface"] == "public" && params["direction"] == "outbound" && params["host_id"] == "123")
+                let start = try #require(params["start"].flatMap(Int.init))
+                let end = try #require(params["end"].flatMap(Int.init))
+                body = samples(start, end)
+            }
+            let response = try #require(HTTPURLResponse(
+                url: url, statusCode: isMetadata ? status : 200, httpVersion: nil, headerFields: nil
+            ))
+            return (Data(body.utf8), response)
+        })
+    }
+
+    private static func monthlySamples(start: Int, end: Int, mbps: Int, cadence: Int) -> String {
+        let points = stride(from: start, through: end, by: cadence).map { "[\($0),\"\(mbps)\"]" }
+        return matrix(series("outbound", "[\(points.joined(separator: ","))]"))
     }
 
     private static func matrix(_ results: String = "") -> String {

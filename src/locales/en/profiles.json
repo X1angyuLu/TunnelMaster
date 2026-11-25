@@ -2,6 +2,9 @@
   "tunnelmaster": {
     "import": "Import WireGuard",
     "imported": "WireGuard profile added. Select it to activate.",
+    "legacyImport": "Import Old Setup",
+    "legacyHint": "Copy WireGuard and routing preferences from the original TunnelMaster app.",
+    "legacyImported": "Original TunnelMaster profile and routing preferences copied. Select the new profile to activate it.",
     "rules": "TunnelMaster routing",
     "unmatched": "Unmatched traffic",
     "direct": "Direct",

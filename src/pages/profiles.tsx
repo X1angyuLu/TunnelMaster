@@ -47,6 +47,7 @@ import {
   getRuntimeLogs,
   importProfile,
   importTunnelMasterWireguard,
+  migrateNativeTunnelMasterProfile,
   reorderProfile,
   updateProfile,
 } from '@/services/cmds'
@@ -60,6 +61,7 @@ import {
   useSetProfileLoading,
 } from '@/store/app-store-context'
 import { debugLog } from '@/utils/debug'
+import getSystem from '@/utils/get-system'
 import { isValidUrl } from '@/utils/network'
 
 // 与 src-tauri/src/main.rs 的 worker_limit 上限(8)保持一致，避免前后端更新风暴不对齐
@@ -92,7 +94,7 @@ const ProfilePage = () => {
     string | null
   >(null)
   const [loading, setLoading] = useState(false)
-  const [importingWireGuard, setImportingWireGuard] = useState(false)
+  const [wireGuardImport, setWireGuardImport] = useState<'file' | 'native'>()
 
   const [batchMode, setBatchMode] = useState(false)
   const [selectedProfiles, setSelectedProfiles] = useState<Set<string>>(
@@ -118,21 +120,29 @@ const ProfilePage = () => {
     isStale,
   } = useProfiles()
 
-  const onImportWireGuard = useLockFn(async () => {
-    setImportingWireGuard(true)
+  const onImportWireGuard = useLockFn(async (source: 'file' | 'native') => {
+    setWireGuardImport(source)
     try {
-      const result = await mutate(importTunnelMasterWireguard, {
+      const runImport =
+        source === 'native'
+          ? migrateNativeTunnelMasterProfile
+          : importTunnelMasterWireguard
+      const result = await mutate(runImport, {
         id: 'import-wireguard-profile',
         errorNotice: false,
       })
       if (result.ok && result.value) {
         await mutateProfiles()
-        showNotice.success('profiles.tunnelmaster.imported')
+        showNotice.success(
+          source === 'native'
+            ? 'profiles.tunnelmaster.legacyImported'
+            : 'profiles.tunnelmaster.imported',
+        )
       }
     } catch (error) {
       showNotice.error(error)
     } finally {
-      setImportingWireGuard(false)
+      setWireGuardImport(undefined)
     }
   })
 
@@ -889,12 +899,26 @@ const ProfilePage = () => {
         <Button
           size="small"
           variant="outlined"
-          loading={importingWireGuard}
+          loading={wireGuardImport === 'file'}
+          disabled={wireGuardImport === 'native'}
           sx={{ flexShrink: 0, textTransform: 'none' }}
-          onClick={onImportWireGuard}
+          onClick={() => void onImportWireGuard('file')}
         >
           {t('profiles.tunnelmaster.import')}
         </Button>
+        {getSystem() === 'macos' && (
+          <Button
+            size="small"
+            variant="outlined"
+            loading={wireGuardImport === 'native'}
+            disabled={wireGuardImport === 'file'}
+            title={t('profiles.tunnelmaster.legacyHint')}
+            sx={{ flexShrink: 0, textTransform: 'none' }}
+            onClick={() => void onImportWireGuard('native')}
+          >
+            {t('profiles.tunnelmaster.legacyImport')}
+          </Button>
+        )}
         <Button
           variant="contained"
           size="small"

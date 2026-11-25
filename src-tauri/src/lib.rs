@@ -12,6 +12,8 @@ mod process;
 mod tunnelmaster_digitalocean;
 mod tunnelmaster_profiles;
 mod tunnelmaster_traffic;
+#[cfg(all(target_os = "macos", feature = "usage-window-smoke"))]
+pub use tunnelmaster_traffic::panel::run_window_smoke;
 pub mod utils;
 
 use crate::constants::files;

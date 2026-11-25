@@ -864,6 +864,8 @@ async fn create_tray_menu(
 }
 
 fn on_tray_icon_event(tray_icon: &TrayIcon, tray_event: TrayIconEvent) {
+    #[cfg(target_os = "macos")]
+    crate::tunnelmaster_traffic::panel::observe_pointer(tray_icon.app_handle(), &tray_event);
     if matches!(
         tray_event,
         TrayIconEvent::Move { .. } | TrayIconEvent::Leave { .. } | TrayIconEvent::Enter { .. }

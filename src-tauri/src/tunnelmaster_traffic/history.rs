@@ -1,4 +1,4 @@
-use super::LocalTrafficBucket;
+use super::{LocalTrafficBucket, LocalTrafficTotals};
 use anyhow::{Context as _, Result, ensure};
 use rusqlite::{Connection, OpenFlags, params};
 use std::{fs, path::Path, time::Duration};
@@ -156,6 +156,21 @@ impl History {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    pub fn totals(&self, from: i64, until: i64) -> Result<Option<LocalTrafficTotals>> {
+        Ok(self.0.query_row(
+            "SELECT SUM(upload), SUM(download) FROM traffic WHERE timestamp >= ? AND timestamp < ? AND samples > 0",
+            params![from, until],
+            |row| {
+                let upload = row.get::<_, Option<i64>>(0)?;
+                let download = row.get::<_, Option<i64>>(1)?;
+                Ok(upload.zip(download).map(|(upload, download)| LocalTrafficTotals {
+                    upload: upload.max(0) as u64,
+                    download: download.max(0) as u64,
+                }))
+            },
+        )?)
+    }
+
     fn import_legacy(&mut self, legacy: &Path) -> Result<()> {
         let legacy_key = "native-history-v1";
         if self.0.query_row(
@@ -248,6 +263,9 @@ mod tests {
         assert_eq!(data.len(), 1);
         assert_eq!((data[0].download, data[0].upload, data[0].samples), (95, 12, 2));
         assert_eq!((data[0].peak_connections, data[0].sessions_started), (Some(2), 1));
+        assert!(db.totals(timestamp - 900, timestamp)?.is_none());
+        let combined = db.totals(timestamp, timestamp + 900)?.context("summary missing")?;
+        assert_eq!((combined.download, combined.upload), (95, 12));
         Ok(())
     }
 }

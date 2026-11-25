@@ -112,8 +112,11 @@ fn apply_real(config: &MacosProxyConfig) -> anyhow::Result<()> {
         && previous
             .as_ref()
             .is_some_and(|candidate| owns_snapshot(&snapshot, candidate));
-    if disabled && !own {
-        return Ok(());
+    if !own {
+        *previous = None;
+        if disabled {
+            return Ok(());
+        }
     }
     ensure!(
         own || (!discovery && snapshot.is_all_disabled()),

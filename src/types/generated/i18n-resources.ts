@@ -491,6 +491,9 @@ export interface TranslationResources {
         domainHint: string
         import: string
         imported: string
+        legacyHint: string
+        legacyImport: string
+        legacyImported: string
         notApplied: string
         proxyDomains: string
         rules: string
@@ -1635,6 +1638,7 @@ export interface TranslationResources {
       connected: string
       coverage: string
       coverageWarning: string
+      dailyUTC: string
       disconnect: string
       done: string
       download: string
@@ -1643,13 +1647,20 @@ export interface TranslationResources {
       dropletId: string
       dropletIdHelp: string
       dropletsFailed: string
+      egressCheck: string
+      egressFailed: string
+      egressHint: string
       empty: string
       fileNotice: string
+      hourlyUTC: string
       inbound: string
+      inboundCoverage: string
       inboundEstimate: string
       keychain: string
       lastSample: string
       listWithToken: string
+      liveHistory: string
+      liveScope: string
       loading: string
       local: string
       localFile: string
@@ -1668,11 +1679,13 @@ export interface TranslationResources {
       nominal: string
       open: string
       outbound: string
+      outboundCoverage: string
       outboundEstimate: string
       peakConnections: string
       peakDown: string
       peakUp: string
       planUnavailable: string
+      previousPeriod: string
       projected: string
       range: string
       range14d: string
@@ -1680,9 +1693,12 @@ export interface TranslationResources {
       range30d: string
       range365d: string
       range60m: string
+      range60s: string
       range7d: string
+      range90d: string
       refresh: string
       refreshDroplets: string
+      sampledRates: string
       samplingPaused: string
       save: string
       saveFailed: string
@@ -1690,6 +1706,7 @@ export interface TranslationResources {
       serverHistory: string
       serverName: string
       serverSettingsError: string
+      serverVolume: string
       sessions: string
       settings: string
       setup: string

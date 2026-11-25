@@ -1,4 +1,9 @@
 {
+  "tunnelmaster": {
+    "legacyImport": "從舊版匯入",
+    "legacyHint": "複製舊版 TunnelMaster 的 WireGuard 和分流設定。",
+    "legacyImported": "已複製舊版 TunnelMaster 的 WireGuard 和分流設定，選取新設定檔即可啟用。"
+  },
   "page": {
     "actions": {
       "updateAll": "更新所有訂閱",

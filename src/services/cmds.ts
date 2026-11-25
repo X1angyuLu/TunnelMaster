@@ -31,6 +31,7 @@ export type {
 } from './bindings'
 
 export const tunnelmasterUsage = {
+  probeEgress: commands.probeTunnelmasterEgress,
   localHistory: (range: string) => commands.tunnelmasterLocalHistory(range),
   open: () => commands.openTunnelmasterUsage(),
   settings: () => commands.getTunnelmasterDoSettings(),
@@ -44,10 +45,12 @@ export const tunnelmasterUsage = {
     commands.listTunnelmasterDoDroplets(token ?? null, dropletId ?? null),
   selectDroplet: (dropletId: string) =>
     commands.selectTunnelmasterDoDroplet(dropletId),
-  report: (days: number, dropletId: string) =>
-    commands.getTunnelmasterDoReport(days, dropletId),
-  monthly: (dropletId: string) =>
-    commands.getTunnelmasterDoMonthlyTransfer(dropletId),
+  setStorage: (storage: 'keychain' | 'localFile', dropletId: string) =>
+    commands.setTunnelmasterDoStorage(storage, dropletId),
+  report: (days: number, dropletId: string, force = false) =>
+    commands.getTunnelmasterDoReport(days, dropletId, force),
+  monthly: (dropletId: string, force = false) =>
+    commands.getTunnelmasterDoMonthlyTransfer(dropletId, force),
   clearCredentials: () => commands.clearTunnelmasterDoCredentials(),
 }
 
@@ -71,6 +74,8 @@ export const isTunnelMasterProfile = (id?: string | null): boolean =>
   id?.startsWith('Ltmwg-') ?? false
 
 export const importTunnelMasterWireguard = commands.importTunnelmasterWireguard
+export const migrateNativeTunnelMasterProfile =
+  commands.migrateNativeTunnelmasterProfile
 export const getTunnelMasterRules = commands.getTunnelmasterRules
 export const saveTunnelMasterRules = commands.saveTunnelmasterRules
 

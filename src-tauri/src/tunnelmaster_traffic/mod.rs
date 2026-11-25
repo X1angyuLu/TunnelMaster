@@ -1,3 +1,4 @@
+pub(crate) mod egress;
 mod history;
 pub(crate) mod panel;
 
@@ -13,13 +14,17 @@ use parking_lot::RwLock;
 use serde::Serialize;
 use specta::Type;
 use std::{
+    collections::VecDeque,
     path::PathBuf,
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
 
 const SAMPLE_INTERVAL: Duration = Duration::from_secs(5);
-static LIVE: RwLock<LiveSample> = RwLock::new(LiveSample::empty());
+static LIVE: RwLock<LiveState> = RwLock::new(LiveState {
+    current: LiveSample::empty(),
+    rates: VecDeque::new(),
+});
 static STARTED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, Serialize, Type)]
@@ -45,6 +50,42 @@ pub struct LocalHistory {
     pub current_upload: u64,
     pub current_download: u64,
     pub sampling: bool,
+    pub live_rates: Vec<LiveTrafficRate>,
+    pub previous: Option<LocalTrafficTotals>,
+}
+
+#[derive(Clone, Copy, Serialize, Type)]
+pub struct LiveTrafficRate {
+    pub at: i64,
+    pub upload: u64,
+    pub download: u64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+pub struct LocalTrafficTotals {
+    pub upload: u64,
+    pub download: u64,
+}
+
+struct LiveState {
+    current: LiveSample,
+    rates: VecDeque<LiveTrafficRate>,
+}
+
+impl LiveState {
+    fn update(&mut self, sample: LiveSample) {
+        self.current = sample;
+        if let Some(at) = sample.time.filter(|_| sample.sampling) {
+            self.rates.push_back(LiveTrafficRate {
+                at,
+                upload: sample.upload_rate,
+                download: sample.download_rate,
+            });
+        }
+        while self.rates.len() > 24 {
+            self.rates.pop_front();
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -148,16 +189,16 @@ async fn sample_continuously() {
                     && reading.download >= last.download
             });
             baseline = Some(reading);
-            *LIVE.write() = LiveSample {
+            LIVE.write().update(LiveSample {
                 time: Some(reading.time),
                 upload_rate: sample.peak_upload_rate,
                 download_rate: sample.peak_download_rate,
                 sampling,
-            };
+            });
             pending.push(sample);
         }
         if !sampling {
-            LIVE.write().sampling = false;
+            LIVE.write().current.sampling = false;
         }
         flush(&mut pending).await;
     }
@@ -219,15 +260,21 @@ fn legacy_history_path() -> Option<PathBuf> {
 
 fn window(range: &str, until: i64) -> Option<(i64, i64)> {
     let (seconds, width) = match range {
+        "60s" => (60, SAMPLE_INTERVAL.as_secs() as i64),
         "60m" => (3600, STORAGE_BUCKET),
         "24h" => (86400, 3600),
         "7d" => (7 * 86400, 6 * 3600),
         "14d" => (14 * 86400, 86400),
         "30d" => (30 * 86400, 86400),
+        "90d" => (90 * 86400, 3 * 86400),
         "365d" => (365 * 86400, 7 * 86400),
         _ => return None,
     };
-    let from = (until - seconds).div_euclid(width) * width;
+    let from = if range == "60s" {
+        until - seconds
+    } else {
+        (until - seconds).div_euclid(width) * width
+    };
     Some((from, width))
 }
 
@@ -236,11 +283,27 @@ fn window(range: &str, until: i64) -> Option<(i64, i64)> {
 pub async fn tunnelmaster_local_history(range: String) -> CmdResult<LocalHistory> {
     let until = Utc::now().timestamp() + 1;
     let (from, bucket_seconds) = window(&range, until).ok_or_else(|| CommandFailure::plain("Invalid traffic range"))?;
-    let buckets = tokio::task::spawn_blocking(move || open_history()?.read(from, until, bucket_seconds))
+    let (buckets, previous) = if range == "60s" {
+        (Vec::new(), None)
+    } else {
+        tokio::task::spawn_blocking(move || {
+            let db = open_history()?;
+            let buckets = db.read(from, until, bucket_seconds)?;
+            let previous = db.totals(from - (until - from), from)?;
+            Ok::<_, anyhow::Error>((buckets, previous))
+        })
         .await
         .map_err(CommandFailure::plain)?
-        .map_err(CommandFailure::plain)?;
-    let live = *LIVE.read();
+        .map_err(CommandFailure::plain)?
+    };
+    let state = LIVE.read();
+    let live = state.current;
+    let live_rates = state
+        .rates
+        .iter()
+        .filter(|rate| rate.at >= until - 60 && rate.at < until)
+        .copied()
+        .collect();
     Ok(LocalHistory {
         buckets,
         from,
@@ -250,6 +313,8 @@ pub async fn tunnelmaster_local_history(range: String) -> CmdResult<LocalHistory
         current_upload: if live.sampling { live.upload_rate } else { 0 },
         current_download: if live.sampling { live.download_rate } else { 0 },
         sampling: live.sampling,
+        live_rates,
+        previous,
     })
 }
 

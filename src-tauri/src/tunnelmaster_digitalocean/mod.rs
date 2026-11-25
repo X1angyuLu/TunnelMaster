@@ -37,8 +37,11 @@ struct Cached<T> {
 }
 
 impl<T: Clone> Cached<T> {
-    fn fresh(&self, ttl: Duration, expected: Option<u64>) -> CmdResult<Option<T>> {
-        if self.revision != REVISION.load(Ordering::Acquire) || self.fetched_at.elapsed() >= ttl {
+    fn fresh(&self, ttl: Duration, expected: Option<u64>, requested_at: Option<Instant>) -> CmdResult<Option<T>> {
+        if self.revision != REVISION.load(Ordering::Acquire)
+            || self.fetched_at.elapsed() >= ttl
+            || requested_at.is_some_and(|request| self.fetched_at < request)
+        {
             return Ok(None);
         }
         check_droplet(self.droplet_id, expected)?;
@@ -91,8 +94,7 @@ async fn access_store<T: Send + 'static>(
 
 async fn current_credentials(expected: Option<u64>) -> CmdResult<(u64, u64, String)> {
     let _settings = SETTINGS_LOCK.lock().await;
-    let (id, token) = access_store(|store| store.credentials()).await?;
-    check_droplet(id, expected)?;
+    let (id, token) = access_store(move |store| store.credentials(expected)).await?;
     Ok((REVISION.load(Ordering::Acquire), id, token))
 }
 
@@ -145,7 +147,7 @@ pub async fn list_tunnelmaster_do_droplets(
 pub async fn select_tunnelmaster_do_droplet(droplet_id: String) -> CmdResult<DigitalOceanSettings> {
     let id = parse_droplet_id(&droplet_id)?;
     let _settings = SETTINGS_LOCK.lock().await;
-    let (_, token) = access_store(|store| store.credentials()).await?;
+    let (_, token) = access_store(|store| store.credentials(None)).await?;
     api()?.validate(id, &token).await?;
     access_store(move |store| {
         let updated = store.select(id)?;
@@ -157,14 +159,32 @@ pub async fn select_tunnelmaster_do_droplet(droplet_id: String) -> CmdResult<Dig
 
 #[tauri::command]
 #[specta::specta]
+pub async fn set_tunnelmaster_do_storage(
+    storage: DigitalOceanCredentialStorage,
+    expected_droplet_id: Option<String>,
+) -> CmdResult<DigitalOceanSettings> {
+    let expected = expected_droplet_id.as_deref().map(parse_droplet_id).transpose()?;
+    let _settings = SETTINGS_LOCK.lock().await;
+    access_store(move |store| {
+        let updated = store.change_storage(storage, expected)?;
+        REVISION.fetch_add(1, Ordering::Release);
+        Ok(updated)
+    })
+    .await
+}
+
+#[tauri::command]
+#[specta::specta]
 pub async fn get_tunnelmaster_do_report(
     days: u32,
     expected_droplet_id: Option<String>,
+    force: Option<bool>,
 ) -> CmdResult<DigitalOceanBandwidthReport> {
     let expected = expected_droplet_id.as_deref().map(parse_droplet_id).transpose()?;
+    let requested_at = force.unwrap_or_default().then(Instant::now);
     let mut reports = REPORTS.lock().await;
     if let Some(cached) = reports.get(&days)
-        && let Some(value) = cached.fresh(REPORT_TTL, expected)?
+        && let Some(value) = cached.fresh(REPORT_TTL, expected, requested_at)?
     {
         return Ok(value);
     }
@@ -179,12 +199,14 @@ pub async fn get_tunnelmaster_do_report(
 #[specta::specta]
 pub async fn get_tunnelmaster_do_monthly_transfer(
     expected_droplet_id: Option<String>,
+    force: Option<bool>,
 ) -> CmdResult<DigitalOceanMonthlyTransfer> {
     let expected = expected_droplet_id.as_deref().map(parse_droplet_id).transpose()?;
+    let requested_at = force.unwrap_or_default().then(Instant::now);
     let mut monthly = MONTHLY.lock().await;
     if let Some(cached) = monthly.as_ref()
         && cached.value.is_current_month()
-        && let Some(value) = cached.fresh(MONTHLY_TTL, expected)?
+        && let Some(value) = cached.fresh(MONTHLY_TTL, expected, requested_at)?
     {
         return Ok(value);
     }
@@ -228,13 +250,28 @@ pub async fn clear_tunnelmaster_do_credentials() -> CmdResult<DigitalOceanSettin
 
 #[cfg(test)]
 mod tests {
-    use super::{Cached, CmdResult, Ordering, REPORT_TTL, REVISION};
+    use super::{Cached, CmdResult, Duration, Ordering, REPORT_TTL, REVISION};
 
     #[test]
     fn a_cached_report_cannot_be_returned_for_another_droplet() -> CmdResult<()> {
         let cached = Cached::new(REVISION.load(Ordering::Acquire), 42, "synthetic report")?;
-        assert_eq!(cached.fresh(REPORT_TTL, Some(42))?, Some("synthetic report"));
-        assert!(cached.fresh(REPORT_TTL, Some(21)).is_err());
+        assert_eq!(cached.fresh(REPORT_TTL, Some(42), None)?, Some("synthetic report"));
+        assert!(cached.fresh(REPORT_TTL, Some(21), None).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn manual_refresh_reuses_only_reports_completed_after_it_was_requested() -> CmdResult<()> {
+        let cached = Cached::new(REVISION.load(Ordering::Acquire), 42, "synthetic report")?;
+        let step = Duration::from_millis(1);
+        assert_eq!(
+            cached.fresh(REPORT_TTL, Some(42), Some(cached.fetched_at + step))?,
+            None
+        );
+        assert_eq!(
+            cached.fresh(REPORT_TTL, Some(42), Some(cached.fetched_at - step))?,
+            Some("synthetic report")
+        );
         Ok(())
     }
 }

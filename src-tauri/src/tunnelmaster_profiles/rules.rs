@@ -20,7 +20,7 @@ const LOCAL_RULES: &[&str] = &[
     "IP-CIDR6,fc00::/7,DIRECT,no-resolve",
     "IP-CIDR6,fe80::/10,DIRECT,no-resolve",
 ];
-const DIRECT_DOMAINS: &[&str] = &[
+pub(super) const NATIVE_DIRECT_DOMAINS: &[&str] = &[
     "bilibili.com",
     "hdslb.com",
     "taobao.com",
@@ -30,11 +30,8 @@ const DIRECT_DOMAINS: &[&str] = &[
     "jdcloud.com",
     "qq.com",
     "weixin.qq.com",
-    "xiaohongshu.com",
-    "xhscdn.com",
-    "xhslink.com",
-    "rednote.com",
 ];
+const EXTRA_DIRECT_DOMAINS: &[&str] = &["xiaohongshu.com", "xhscdn.com", "xhslink.com", "rednote.com"];
 pub(super) const AI_DOMAINS: &[&str] = &[
     "openai.com",
     "chatgpt.com",
@@ -66,7 +63,11 @@ pub struct TunnelMasterRules {
 impl Default for TunnelMasterRules {
     fn default() -> Self {
         Self {
-            direct_domains: DIRECT_DOMAINS.iter().map(|domain| (*domain).to_owned()).collect(),
+            direct_domains: NATIVE_DIRECT_DOMAINS
+                .iter()
+                .chain(EXTRA_DIRECT_DOMAINS)
+                .map(|domain| (*domain).to_owned())
+                .collect(),
             proxy_domains: AI_DOMAINS.iter().map(|domain| (*domain).to_owned()).collect(),
             china_ip_direct: true,
             unmatched: UnmatchedTraffic::Direct,
@@ -199,7 +200,8 @@ pub(super) fn read_preferences(yaml: &str) -> Result<TunnelMasterRules> {
     preferences(&read_config(yaml)?)
 }
 
-pub(super) fn new_profile(proxy: serde_json::Value) -> Result<String> {
+pub(super) fn new_profile(proxy: serde_json::Value, rules: TunnelMasterRules) -> Result<String> {
+    let rules = rules.normalize()?;
     let ipv6 = proxy.get("ipv6").is_some();
     let groups = serde_json::json!([{"name": "TunnelMaster", "type": "select", "proxies": [WIREGUARD, "DIRECT"]}]);
     let mut config = Mapping::new();
@@ -207,7 +209,6 @@ pub(super) fn new_profile(proxy: serde_json::Value) -> Result<String> {
     config.insert("ipv6".into(), ipv6.into());
     config.insert("proxies".into(), to_value(vec![proxy])?);
     config.insert("proxy-groups".into(), to_value(groups)?);
-    let rules = TunnelMasterRules::default();
     write_prefs(&mut config, None, &rules)?;
     serde_yaml_ng::to_string(&config).map_err(|_| anyhow::anyhow!("Could not generate the WireGuard profile."))
 }
@@ -294,7 +295,10 @@ mod tests {
 
     #[test]
     fn updates_presets_without_removing_custom_rules_or_dns() -> Result<()> {
-        let yaml = new_profile(json!({"name": "WireGuard", "dns": ["192.0.2.53"]}))?;
+        let yaml = new_profile(
+            json!({"name": "WireGuard", "dns": ["192.0.2.53"]}),
+            TunnelMasterRules::default(),
+        )?;
         let mut config = read_config(&yaml)?;
         let Some(values) = config.get_mut("rules").and_then(Value::as_sequence_mut) else {
             bail!("generated profile did not contain rules");

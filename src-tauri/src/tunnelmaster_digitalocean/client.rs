@@ -36,6 +36,19 @@ pub struct DigitalOceanBandwidthReport {
     until: i64,
     inbound: DigitalOceanBandwidthSeries,
     outbound: DigitalOceanBandwidthSeries,
+    bucket_seconds: i64,
+    buckets: Vec<DigitalOceanBandwidthBucket>,
+}
+
+#[derive(Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DigitalOceanBandwidthBucket {
+    start: i64,
+    until: i64,
+    inbound_bytes: Option<f64>,
+    outbound_bytes: Option<f64>,
+    inbound_covered_seconds: f64,
+    outbound_covered_seconds: f64,
 }
 
 #[derive(Clone, Serialize, Type)]
@@ -98,11 +111,15 @@ impl DigitalOceanClient {
             self.bandwidth(id, token, Direction::Inbound, from, until),
             self.bandwidth(id, token, Direction::Outbound, from, until),
         )?;
+        let bucket_seconds = if days == 1 { 3600 } else { DAY };
+        let buckets = bandwidth_buckets(&inbound, &outbound, from, until, bucket_seconds);
         Ok(DigitalOceanBandwidthReport {
             from,
             until,
             inbound: inbound.series(from, until),
             outbound: outbound.series(from, until),
+            bucket_seconds,
+            buckets,
         })
     }
 
@@ -371,6 +388,38 @@ struct Estimate {
     seconds: f64,
 }
 
+impl Estimate {
+    fn measured_bytes(&self) -> Option<f64> {
+        (self.seconds > 0.0 && self.bytes.is_finite()).then_some(self.bytes)
+    }
+}
+
+fn bandwidth_buckets(
+    inbound: &Readings,
+    outbound: &Readings,
+    from: i64,
+    until: i64,
+    width: i64,
+) -> Vec<DigitalOceanBandwidthBucket> {
+    let mut buckets = Vec::new();
+    let mut start = from;
+    while start < until {
+        let end = ((start.div_euclid(width) + 1) * width).min(until);
+        let inbound = inbound.estimate(start, end);
+        let outbound = outbound.estimate(start, end);
+        buckets.push(DigitalOceanBandwidthBucket {
+            start,
+            until: end,
+            inbound_bytes: inbound.measured_bytes(),
+            outbound_bytes: outbound.measured_bytes(),
+            inbound_covered_seconds: inbound.seconds,
+            outbound_covered_seconds: outbound.seconds,
+        });
+        start = end;
+    }
+    buckets
+}
+
 impl Readings {
     fn from_values(mut values: Vec<(f64, String)>) -> CmdResult<Self> {
         values.sort_unstable_by(|left, right| left.0.total_cmp(&right.0));
@@ -446,7 +495,7 @@ impl Readings {
         let peak_mbps = samples.iter().map(|point| point.mbps).reduce(f64::max);
         DigitalOceanBandwidthSeries {
             samples,
-            estimated_bytes: (estimate.seconds > 0.0 && estimate.bytes.is_finite()).then_some(estimate.bytes.round()),
+            estimated_bytes: estimate.measured_bytes().map(f64::round),
             covered_seconds: estimate.seconds,
             peak_mbps,
         }
@@ -565,7 +614,7 @@ fn monthly_summary(
     usage: Estimate,
 ) -> DigitalOceanMonthlyTransfer {
     let elapsed = now - first;
-    let outbound_gib = (usage.seconds > 0.0 && usage.bytes.is_finite()).then_some(usage.bytes / GIB);
+    let outbound_gib = usage.measured_bytes().map(|bytes| bytes / GIB);
     let coverage = (elapsed > 0).then(|| (usage.seconds / elapsed as f64).min(1.0));
     let accrued_gib = plan.as_ref().map(|item| item.allowance(elapsed));
     let projected_allowance_gib = plan.as_ref().map(|item| item.allowance(month_end - first));
@@ -622,6 +671,31 @@ mod tests {
         assert_eq!(whole.bytes, 90_000_000.0);
         assert!((whole.bytes - first.bytes - second.bytes).abs() < 0.000_01);
         assert_eq!(first.seconds + second.seconds, 180.0);
+        Ok(())
+    }
+
+    #[test]
+    fn chart_buckets_clip_both_edges_and_preserve_independent_direction_coverage() -> CmdResult<()> {
+        let inbound = Readings::from_values((1..=6).map(|index| (f64::from(index * 20), "2".into())).collect())?;
+        let outbound = Readings::from_values(vec![(100.0, "0".into()), (120.0, "0".into())])?;
+        let buckets = bandwidth_buckets(&inbound, &outbound, 30, 110, 100);
+        let [first, last] = buckets.as_slice() else {
+            return Err(invalid_response());
+        };
+        assert_eq!((first.start, first.until), (30, 100));
+        assert_eq!((last.start, last.until), (100, 110));
+        assert_eq!(
+            (first.inbound_bytes, first.inbound_covered_seconds),
+            (Some(17_500_000.0), 70.0)
+        );
+        assert_eq!((first.outbound_bytes, first.outbound_covered_seconds), (None, 0.0));
+        assert_eq!(
+            (last.inbound_bytes, last.inbound_covered_seconds),
+            (Some(2_500_000.0), 10.0)
+        );
+        assert_eq!((last.outbound_bytes, last.outbound_covered_seconds), (Some(0.0), 10.0));
+        let total = buckets.iter().filter_map(|bucket| bucket.inbound_bytes).sum::<f64>();
+        assert_eq!(inbound.series(30, 110).estimated_bytes, Some(total));
         Ok(())
     }
 

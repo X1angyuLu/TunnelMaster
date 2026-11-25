@@ -2,6 +2,9 @@
   "tunnelmaster": {
     "import": "导入 WireGuard",
     "imported": "已添加 WireGuard 配置，选中即可启用。",
+    "legacyImport": "从旧版导入",
+    "legacyHint": "复制旧版 TunnelMaster 的 WireGuard 和分流设置。",
+    "legacyImported": "已复制旧版 TunnelMaster 的 WireGuard 和分流设置，选中新配置即可启用。",
     "rules": "TunnelMaster 分流",
     "unmatched": "未匹配流量",
     "direct": "直连",

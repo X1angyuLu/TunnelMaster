@@ -27,6 +27,7 @@ type Props = {
   until: number
   bucketSeconds?: number
   formatValue: (value: number) => string
+  formatTimestamp?: (value: number) => string
   compact?: boolean
 }
 
@@ -92,6 +93,7 @@ export function UsageChart({
   until,
   bucketSeconds,
   formatValue,
+  formatTimestamp = formatTime,
   compact = false,
 }: Props) {
   const { t } = useTranslation()
@@ -145,7 +147,7 @@ export function UsageChart({
       Home: 0,
       End: points.length - 1,
     }[event.key]
-    if (event.key === 'Escape' && pin != null) {
+    if (!compact && event.key === 'Escape' && pin != null) {
       event.preventDefault()
       setPin(null)
       return
@@ -195,7 +197,7 @@ export function UsageChart({
       </Stack>
       <Box
         sx={{
-          height: compact ? 83 : 'clamp(134px, 24vh, 244px)',
+          height: compact ? 104 : 'clamp(134px, 24vh, 244px)',
           borderRadius: 1.5,
           overflow: 'hidden',
           backgroundColor: 'action.hover',
@@ -272,10 +274,10 @@ export function UsageChart({
       {!compact && (
         <Stack direction="row" sx={{ justifyContent: 'space-between' }}>
           <Typography color="text.secondary" variant="caption">
-            {formatTime(start)}
+            {formatTimestamp(start)}
           </Typography>
           <Typography color="text.secondary" variant="caption">
-            {formatTime(end)}
+            {formatTimestamp(end)}
           </Typography>
         </Stack>
       )}
@@ -298,7 +300,7 @@ export function UsageChart({
         ) : (
           <>
             <Typography color="text.secondary" variant="caption">
-              {formatTime(selected.at)}
+              {formatTimestamp(selected.at)}
             </Typography>
             {[selected.first, selected.second].map((value, i) => (
               <Typography
@@ -310,7 +312,7 @@ export function UsageChart({
                 {value == null ? '—' : formatValue(value)}
               </Typography>
             ))}
-            {!compact && selected.detail}
+            {selected.detail}
           </>
         )}
       </Stack>

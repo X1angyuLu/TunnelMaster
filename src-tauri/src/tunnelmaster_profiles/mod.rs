@@ -1,3 +1,5 @@
+#[cfg(target_os = "macos")]
+mod legacy;
 mod rules;
 mod wireguard;
 
@@ -33,16 +35,43 @@ pub async fn import_tunnelmaster_wireguard() -> CmdResult<Option<String>> {
     let source = read_wireguard_file(path)
         .await
         .map_err(|error| coded_error("WIREGUARD_IMPORT_FAILED", error))?;
-    let proxy = wireguard::parse(&source).map_err(|error| coded_error("WIREGUARD_IMPORT_FAILED", error))?;
-    let yaml = rules::new_profile(proxy).map_err(|error| coded_error("WIREGUARD_IMPORT_FAILED", error))?;
-    let name: String = path
-        .file_stem()
-        .and_then(|name| name.to_str())
-        .unwrap_or("WireGuard")
-        .chars()
-        .filter(|ch| !ch.is_control())
-        .take(80)
-        .collect();
+    let name = path.file_stem().and_then(|name| name.to_str()).unwrap_or("WireGuard");
+    add_wireguard_profile(&source, name, TunnelMasterRules::default(), "WIREGUARD_IMPORT_FAILED")
+        .await
+        .map(Some)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn migrate_native_tunnelmaster_profile() -> CmdResult<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let legacy::NativeProfile { source, name, rules } = tokio::task::spawn_blocking(legacy::read_native_profile)
+            .await
+            .map_err(|_| {
+                coded_error(
+                    "NATIVE_WIREGUARD_IMPORT_FAILED",
+                    "Could not read the native TunnelMaster profile.",
+                )
+            })??;
+        add_wireguard_profile(&source, &name, rules, "NATIVE_WIREGUARD_IMPORT_FAILED").await
+    }
+    #[cfg(not(target_os = "macos"))]
+    Err(coded_error(
+        "NATIVE_WIREGUARD_IMPORT_UNAVAILABLE",
+        "The native TunnelMaster profile can be imported on macOS.",
+    ))
+}
+
+async fn add_wireguard_profile(
+    source: &str,
+    name: &str,
+    rules: TunnelMasterRules,
+    error_code: &str,
+) -> CmdResult<String> {
+    let proxy = wireguard::parse(source).map_err(|error| coded_error(error_code, error))?;
+    let yaml = rules::new_profile(proxy, rules).map_err(|error| coded_error(error_code, error))?;
+    let name: String = name.chars().filter(|ch| !ch.is_control()).take(80).collect();
     let name = if name.trim().is_empty() {
         "WireGuard".to_owned()
     } else {
@@ -50,9 +79,9 @@ pub async fn import_tunnelmaster_wireguard() -> CmdResult<Option<String>> {
     };
     let uid = append_tunnelmaster_wireguard(name, &yaml)
         .await
-        .map_err(|_| coded_error("WIREGUARD_IMPORT_FAILED", "Could not save the local WireGuard profile."))?;
+        .map_err(|_| coded_error(error_code, "Could not save the local WireGuard profile."))?;
     announce(Refresh::Profiles);
-    Ok(Some(uid.into()))
+    Ok(uid.into())
 }
 
 #[tauri::command]

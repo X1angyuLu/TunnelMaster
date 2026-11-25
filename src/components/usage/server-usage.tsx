@@ -12,7 +12,7 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { tunnelmasterUsage, type UsageDoReport } from '@/services/cmds'
@@ -39,9 +39,9 @@ const serverRanges = [
 ] as const
 
 type ServerDays = (typeof serverRanges)[number][0]
+type ServerBucket = UsageDoReport['buckets'][number]
 
-function bandwidthPoints(report: UsageDoReport | undefined) {
-  if (!report) return []
+function bandwidthPoints(report: UsageDoReport) {
   const points = new Map<number, UsagePoint>()
   const series = [
     ['first', report.inbound.samples],
@@ -81,6 +81,7 @@ export function ServerUsage({
   const [days, setDays] = useState<ServerDays>(1)
   const [selecting, setSelecting] = useState(false)
   const [selectionError, setSelectionError] = useState<string>()
+  const forceRefreshRef = useRef(false)
   const droplets = useQuery({
     queryKey: ['usage', 'do-droplets', dropletId, revision],
     queryFn: () => tunnelmasterUsage.listDroplets(undefined, dropletId),
@@ -90,14 +91,16 @@ export function ServerUsage({
   })
   const transfer = useQuery({
     queryKey: ['usage', 'do-monthly', dropletId, revision],
-    queryFn: () => tunnelmasterUsage.monthly(dropletId),
+    queryFn: () =>
+      tunnelmasterUsage.monthly(dropletId, forceRefreshRef.current),
     refetchInterval: 5 * 60_000,
     refetchOnWindowFocus: true,
     retry: false,
   })
   const bandwidth = useQuery({
     queryKey: ['usage', 'do-report', dropletId, revision, days],
-    queryFn: () => tunnelmasterUsage.report(days, dropletId),
+    queryFn: () =>
+      tunnelmasterUsage.report(days, dropletId, forceRefreshRef.current),
     refetchInterval: 2 * 60_000,
     refetchOnWindowFocus: true,
     retry: false,
@@ -143,8 +146,73 @@ export function ServerUsage({
     }
   }
 
-  const refresh = () =>
-    Promise.allSettled([transfer.refetch(), bandwidth.refetch()])
+  const refresh = async () => {
+    forceRefreshRef.current = true
+    try {
+      await Promise.allSettled([transfer.refetch(), bandwidth.refetch()])
+    } finally {
+      forceRefreshRef.current = false
+    }
+  }
+
+  const chartTitle = compact
+    ? t('usage.serverVolume')
+    : t('usage.serverHistory')
+  const bucketDetail = (bucket: ServerBucket) => {
+    const duration = Math.max(1, bucket.until - bucket.start)
+    const coverage = (seconds: number | null) =>
+      seconds == null
+        ? '—'
+        : formatPct(Math.min(Math.max(0, seconds) / duration, 1))
+    return (
+      <>
+        {!compact && (
+          <Typography variant="caption" color="text.secondary">
+            {formatUTC(bucket.start)} – {formatUTC(bucket.until)} UTC
+          </Typography>
+        )}
+        <Typography variant="caption" color="text.secondary">
+          {t('usage.inboundCoverage', {
+            percent: coverage(bucket.inboundCoveredSeconds),
+          })}
+          {!compact && ` · ${formatBytes(bucket.inboundBytes)}`}
+        </Typography>
+        <Typography variant="caption" color="text.secondary">
+          {t('usage.outboundCoverage', {
+            percent: coverage(bucket.outboundCoveredSeconds),
+          })}
+          {!compact && ` · ${formatBytes(bucket.outboundBytes)}`}
+        </Typography>
+      </>
+    )
+  }
+  let points: UsagePoint[] = []
+  if (report && compact) {
+    points = report.buckets
+      .filter(
+        (bucket) => bucket.inboundBytes != null || bucket.outboundBytes != null,
+      )
+      .map((bucket) => ({
+        at: bucket.start,
+        first: bucket.inboundBytes,
+        second: bucket.outboundBytes,
+        detail: bucketDetail(bucket),
+      }))
+  } else if (report) {
+    const details = report.buckets.map((bucket) => ({
+      start: bucket.start,
+      until: bucket.until,
+      detail: bucketDetail(bucket),
+    }))
+    points = bandwidthPoints(report).map((point) => ({
+      ...point,
+      detail: details.find(
+        ({ start, until }) =>
+          start <= point.at &&
+          (point.at < until || (point.at === until && until === report.until)),
+      )?.detail,
+    }))
+  }
 
   return (
     <Stack spacing={compact ? 1 : 2}>
@@ -337,7 +405,7 @@ export function ServerUsage({
               component="h2"
               sx={{ fontWeight: 650 }}
             >
-              {t('usage.serverHistory')}
+              {chartTitle}
             </Typography>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
               <UsageRangePicker<ServerDays>
@@ -367,6 +435,11 @@ export function ServerUsage({
           {bandwidth.isPending && !report && (
             <LinearProgress aria-label={t('usage.loading')} />
           )}
+          {compact && report && (
+            <Typography variant="caption" color="text.secondary">
+              {t(days === 1 ? 'usage.hourlyUTC' : 'usage.dailyUTC')}
+            </Typography>
+          )}
           {!compact && report && (
             <Box
               sx={{
@@ -388,13 +461,19 @@ export function ServerUsage({
           {(!bandwidth.isPending || report) && (
             <UsageChart
               key={days}
-              title={t('usage.serverHistory')}
-              firstLabel={t('usage.inbound')}
-              secondLabel={t('usage.outbound')}
-              points={bandwidthPoints(report)}
+              title={chartTitle}
+              firstLabel={t(
+                compact ? 'usage.inboundEstimate' : 'usage.inbound',
+              )}
+              secondLabel={t(
+                compact ? 'usage.outboundEstimate' : 'usage.outbound',
+              )}
+              points={points}
               from={report?.from ?? 0}
               until={report?.until ?? 0}
-              formatValue={formatMbps}
+              bucketSeconds={compact ? report?.bucketSeconds : undefined}
+              formatTimestamp={compact ? formatUTC : undefined}
+              formatValue={compact ? formatBytes : formatMbps}
               compact={compact}
             />
           )}

@@ -10,7 +10,11 @@ use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as 
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-use super::client::{parse_droplet_id, parse_token};
+use super::{
+    check_droplet,
+    client::{parse_droplet_id, parse_token},
+    settings_changed,
+};
 use crate::cmd::{CmdResult, CommandFailure};
 
 const PRIVATE_DIRECTORY: &str = "tunnelmaster-private";
@@ -19,7 +23,7 @@ const FILE_LIMIT: u64 = 16 * 1024;
 #[cfg(target_os = "macos")]
 const ITEM_NOT_FOUND: i32 = -25_300;
 
-#[derive(Clone, Copy, Deserialize, Serialize, Type)]
+#[derive(Clone, Copy, Deserialize, PartialEq, Eq, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum DigitalOceanCredentialStorage {
     Keychain,
@@ -48,12 +52,15 @@ enum SavedCredential {
 }
 
 impl SavedSettings {
-    fn summary(&self) -> DigitalOceanSettings {
-        let storage = match &self.credential {
+    const fn storage(&self) -> DigitalOceanCredentialStorage {
+        match self.credential {
             SavedCredential::Keychain { .. } => DigitalOceanCredentialStorage::Keychain,
             SavedCredential::LocalFile { .. } => DigitalOceanCredentialStorage::LocalFile,
-        };
-        DigitalOceanSettings::new(Some(self.droplet_id.clone()), Some(storage))
+        }
+    }
+
+    fn summary(&self) -> DigitalOceanSettings {
+        DigitalOceanSettings::new(Some(self.droplet_id.clone()), Some(self.storage()))
     }
 
     fn token(&self) -> CmdResult<String> {
@@ -108,14 +115,36 @@ impl CredentialStore {
         Ok(())
     }
 
-    pub(super) fn credentials(&self) -> CmdResult<(u64, String)> {
+    pub(super) fn credentials(&self, expected: Option<u64>) -> CmdResult<(u64, String)> {
+        let (id, saved) = self.selected(expected)?;
+        Ok((id, saved.token()?))
+    }
+
+    pub(super) fn change_storage(
+        &self,
+        storage: DigitalOceanCredentialStorage,
+        expected: Option<u64>,
+    ) -> CmdResult<DigitalOceanSettings> {
+        let (id, saved) = self.selected(expected)?;
+        if saved.storage() == storage {
+            return Ok(saved.summary());
+        }
+        self.save(id, saved.token()?, storage)
+    }
+
+    fn selected(&self, expected: Option<u64>) -> CmdResult<(u64, SavedSettings)> {
         let saved = self.read()?.ok_or_else(|| {
+            if expected.is_some() {
+                return settings_changed();
+            }
             CommandFailure::coded(
                 "digital_ocean_not_configured",
                 "Save DigitalOcean credentials and select a Droplet first.",
             )
         })?;
-        Ok((parse_droplet_id(&saved.droplet_id)?, saved.token()?))
+        let id = parse_droplet_id(&saved.droplet_id)?;
+        check_droplet(id, expected)?;
+        Ok((id, saved))
     }
 
     pub(super) fn save(
@@ -373,7 +402,7 @@ mod tests {
         assert!(!encoded.contains(token));
         assert!(encoded.contains("localFile"));
         assert_eq!(store.select(42)?.droplet_id.as_deref(), Some("42"));
-        assert_eq!(store.credentials()?, (42, token.to_owned()));
+        assert_eq!(store.credentials(None)?, (42, token.to_owned()));
         #[cfg(unix)]
         {
             let metadata = store.directory.metadata().map_err(|_| storage_error())?;
@@ -387,7 +416,34 @@ mod tests {
         }
         assert!(store.clear()?.droplet_id.is_none());
         assert!(!store.directory.join(FILE_NAME).exists());
-        assert!(store.credentials().is_err());
+        assert!(store.credentials(None).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn stale_selection_is_rejected_after_droplet_change_or_removal() -> CmdResult<()> {
+        let fixture = Fixture::new()?;
+        let store = CredentialStore {
+            directory: fixture.0.join(PRIVATE_DIRECTORY),
+        };
+        let mode = DigitalOceanCredentialStorage::LocalFile;
+        store.save(42, "synthetic".into(), mode)?;
+        assert!(store.change_storage(mode, Some(21)).is_err());
+        assert_eq!(store.change_storage(mode, Some(42))?.droplet_id.as_deref(), Some("42"));
+        assert_eq!(store.credentials(Some(42))?, (42, "synthetic".into()));
+        assert_eq!(
+            store.credentials(Some(21)).err().and_then(|error| error.code),
+            settings_changed().code
+        );
+        store.clear()?;
+        assert_eq!(
+            store.credentials(Some(42)).err().and_then(|error| error.code),
+            settings_changed().code
+        );
+        assert_eq!(
+            store.credentials(None).err().and_then(|error| error.code).as_deref(),
+            Some("digital_ocean_not_configured"),
+        );
         Ok(())
     }
 
@@ -403,7 +459,7 @@ mod tests {
         let target = fixture.0.join("unrelated");
         fs::rename(&saved, &target).map_err(|_| storage_error())?;
         std::os::unix::fs::symlink(&target, &saved).map_err(|_| storage_error())?;
-        assert!(store.credentials().is_err());
+        assert!(store.credentials(None).is_err());
         assert!(store.clear().is_err());
         assert!(target.exists());
         Ok(())

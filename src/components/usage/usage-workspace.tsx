@@ -14,7 +14,7 @@ import {
   Typography,
 } from '@mui/material'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { tunnelmasterUsage, type UsageDoSettings } from '@/services/cmds'
@@ -26,6 +26,7 @@ import {
 } from '@/services/query-client'
 import { usageError } from '@/utils/usage-format'
 
+import { EgressProbe } from './egress-probe'
 import { LocalUsage } from './local-usage'
 import { ServerUsage } from './server-usage'
 import { UsageCredentialsDialog } from './usage-credentials-dialog'
@@ -70,13 +71,25 @@ export function UsageWorkspace({ compact = false }: { compact?: boolean }) {
     }
   }
 
-  const closeTray = async () => {
+  const closeTray = useCallback(async () => {
     try {
       await getCurrentWindow().hide()
     } catch (failure) {
       setOpenError(usageError(failure, t('usage.unavailable')))
     }
-  }
+  }, [t])
+
+  useEffect(() => {
+    if (!compact) return
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape' && !event.defaultPrevented) {
+        event.preventDefault()
+        void closeTray()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [closeTray, compact])
 
   return (
     <Stack spacing={compact ? 1 : 2}>
@@ -104,6 +117,7 @@ export function UsageWorkspace({ compact = false }: { compact?: boolean }) {
           <ToggleButton value="local">{t('usage.local')}</ToggleButton>
           <ToggleButton value="server">{t('usage.server')}</ToggleButton>
         </ToggleButtonGroup>
+        {view === 'local' && <EgressProbe compact={compact} />}
         {compact ? (
           <Stack direction="row" spacing={0.5}>
             <Tooltip title={t('usage.open')}>

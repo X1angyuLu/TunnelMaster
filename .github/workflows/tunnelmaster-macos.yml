@@ -12,13 +12,14 @@ on:
       - vendor/tunnelmaster-service/**
       - Cargo.lock
       - pnpm-lock.yaml
+      - tests/usage.browser.mjs
 
 permissions:
   contents: read
 
 concurrency:
   group: tunnelmaster-macos-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   tun:
@@ -69,3 +70,23 @@ jobs:
         run: |
           bash scripts/test-macos-tun.sh target/debug/bundle/macos/TunnelMaster.app \
             target/bundled-service/aarch64-apple-darwin/release/service-integration-driver
+      - name: Verify native window toggling and focus dismissal
+        if: '!cancelled()'
+        run: cargo run -p clash-verge --locked --features usage-window-smoke --example usage-window-smoke
+
+
+  usage-ui:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '26.13.0'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Verify traffic charts and keyboard interactions in Chrome
+        run: TUNNELMASTER_TEST_CHROME="$(command -v google-chrome)" node tests/usage.browser.mjs

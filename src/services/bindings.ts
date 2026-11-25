@@ -32,22 +32,40 @@ export const commands = {
     __TAURI_INVOKE<DigitalOceanSettings>('select_tunnelmaster_do_droplet', {
       dropletId,
     }),
-  getTunnelmasterDoReport: (days: number, expectedDropletId: string | null) =>
+  getTunnelmasterDoReport: (
+    days: number,
+    expectedDropletId: string | null,
+    force: boolean | null,
+  ) =>
     __TAURI_INVOKE<DigitalOceanBandwidthReport>('get_tunnelmaster_do_report', {
       days,
       expectedDropletId,
+      force,
     }),
-  getTunnelmasterDoMonthlyTransfer: (expectedDropletId: string | null) =>
+  getTunnelmasterDoMonthlyTransfer: (
+    expectedDropletId: string | null,
+    force: boolean | null,
+  ) =>
     __TAURI_INVOKE<DigitalOceanMonthlyTransfer>(
       'get_tunnelmaster_do_monthly_transfer',
-      { expectedDropletId },
+      { expectedDropletId, force },
     ),
   clearTunnelmasterDoCredentials: () =>
     __TAURI_INVOKE<DigitalOceanSettings>('clear_tunnelmaster_do_credentials'),
+  setTunnelmasterDoStorage: (
+    storage: DigitalOceanCredentialStorage,
+    expectedDropletId: string | null,
+  ) =>
+    __TAURI_INVOKE<DigitalOceanSettings>('set_tunnelmaster_do_storage', {
+      storage,
+      expectedDropletId,
+    }),
   migrateTunnelmasterDoCredentials: () =>
     __TAURI_INVOKE<DigitalOceanSettings>('migrate_tunnelmaster_do_credentials'),
   importTunnelmasterWireguard: () =>
     __TAURI_INVOKE<string | null>('import_tunnelmaster_wireguard'),
+  migrateNativeTunnelmasterProfile: () =>
+    __TAURI_INVOKE<string>('migrate_native_tunnelmaster_profile'),
   getTunnelmasterRules: (index: string) =>
     __TAURI_INVOKE<{
       directDomains: string[]
@@ -62,6 +80,8 @@ export const commands = {
     }),
   tunnelmasterLocalHistory: (range: string) =>
     __TAURI_INVOKE<LocalHistory>('tunnelmaster_local_history', { range }),
+  probeTunnelmasterEgress: () =>
+    __TAURI_INVOKE<EgressProbe>('probe_tunnelmaster_egress'),
   openTunnelmasterUsage: () => __TAURI_INVOKE<null>('open_tunnelmaster_usage'),
   probeListener: (request: ListenerProbe) =>
     __TAURI_INVOKE<ListenerProbeOutcome>('probe_listener', { request }),
@@ -340,11 +360,22 @@ export type DelayHistory = {
   delay: number
 }
 
+export type DigitalOceanBandwidthBucket = {
+  start: number
+  until: number
+  inboundBytes: number | null
+  outboundBytes: number | null
+  inboundCoveredSeconds: number | null
+  outboundCoveredSeconds: number | null
+}
+
 export type DigitalOceanBandwidthReport = {
   from: number
   until: number
   inbound: DigitalOceanBandwidthSeries
   outbound: DigitalOceanBandwidthSeries
+  bucketSeconds: number
+  buckets: DigitalOceanBandwidthBucket[]
 }
 
 export type DigitalOceanBandwidthSample = {
@@ -404,6 +435,11 @@ export type DownloadEvent =
       }
     }
   | { event: 'Finished' }
+
+export type EgressProbe = {
+  ip: string
+  country: string | null
+}
 
 /**  Operation associated with a pending failure. */
 export type FailedOperation =
@@ -666,6 +702,12 @@ export type ListenerProbeOutcome =
 
 export type ListenerTransport = 'tcp' | 'udp'
 
+export type LiveTrafficRate = {
+  at: number
+  upload: number
+  download: number
+}
+
 export type LocalBackupFile = {
   filename: string
   path: string
@@ -682,6 +724,8 @@ export type LocalHistory = {
   current_upload: number
   current_download: number
   sampling: boolean
+  live_rates: LiveTrafficRate[]
+  previous: LocalTrafficTotals | null
 }
 
 export type LocalTrafficBucket = {
@@ -694,6 +738,11 @@ export type LocalTrafficBucket = {
   peak_upload_rate: number
   peak_connections: number | null
   sessions_started: number
+}
+
+export type LocalTrafficTotals = {
+  upload: number
+  download: number
 }
 
 export type NetworkInterfaceView = {

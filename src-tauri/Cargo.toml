@@ -24,6 +24,7 @@ tokio-trace = ["clash-verge-logging/tokio-trace"]
 chrome-trace = ["clash-verge-logging/chrome-trace"]
 clippy = ["tauri/test"]
 perf-harness = ["dep:tauri-plugin-wdio-webdriver"]
+usage-window-smoke = []
 
 [package.metadata.bundle]
 identifier = "com.x1angyulu.TunnelMaster.verge"
@@ -165,3 +166,7 @@ warp = { version = "0.4.3", features = ["test"] }
 
 [lints]
 workspace = true
+
+[[example]]
+name = "usage-window-smoke"
+required-features = ["usage-window-smoke"]

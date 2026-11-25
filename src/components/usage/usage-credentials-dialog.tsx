@@ -45,6 +45,11 @@ export function UsageCredentialsDialog({ settings, onClose, onChange }: Props) {
     storage === settings?.storage &&
     parsedId !== settings?.dropletId &&
     droplets?.some(({ id }) => id === parsedId)
+  const canChangeStorage =
+    !token.trim() &&
+    settings?.dropletId === parsedId &&
+    settings.storage != null &&
+    storage !== settings.storage
 
   const loadDroplets = async () => {
     setBusy(true)
@@ -89,6 +94,8 @@ export function UsageCredentialsDialog({ settings, onClose, onChange }: Props) {
       )
     } else if (canSwitch) {
       void runChange(() => tunnelmasterUsage.selectDroplet(parsedId))
+    } else if (canChangeStorage) {
+      void runChange(() => tunnelmasterUsage.setStorage(storage, parsedId))
     }
   }
 
@@ -239,7 +246,9 @@ export function UsageCredentialsDialog({ settings, onClose, onChange }: Props) {
           <Button
             type="submit"
             variant="contained"
-            disabled={(!canSaveToken && !canSwitch) || busy}
+            disabled={
+              (!canSaveToken && !canSwitch && !canChangeStorage) || busy
+            }
           >
             {t('usage.save')}
           </Button>

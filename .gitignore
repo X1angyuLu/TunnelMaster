@@ -1,0 +1,9 @@
+.build/
+.swiftpm/
+dist/
+.DS_Store
+*.conf
+*.key
+*.mmdb
+*.metadb
+*.xcuserstate

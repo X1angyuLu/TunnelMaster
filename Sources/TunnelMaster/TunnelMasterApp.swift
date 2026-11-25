@@ -4,58 +4,84 @@ import SwiftUI
 @main
 @MainActor
 struct TunnelMasterApp: App {
-    @StateObject private var store = TunnelStore()
-    private static let connectedGlobe = globeImage(opacity: 1)
-    private static let disconnectedGlobe = globeImage(opacity: 0.45)
+    @NSApplicationDelegateAdaptor(TunnelMasterDelegate.self) private var delegate
 
     var body: some Scene {
-        MenuBarExtra {
-            MenuView(store: store)
-        } label: {
-            Label {
-                Text("TunnelMaster")
-            } icon: {
-                Image(nsImage: store.status == .connected ? Self.connectedGlobe : Self.disconnectedGlobe)
+        Settings { EmptyView() }
+            .commands {
+                CommandGroup(replacing: .appSettings) {}
+                CommandGroup(replacing: .appTermination) {
+                    Button("退出 TunnelMaster", action: delegate.quit)
+                        .keyboardShortcut("q")
+                }
             }
-            .labelStyle(.iconOnly)
-            .accessibilityLabel(menuBarTitle)
-        }
-        .menuBarExtraStyle(.window)
+    }
+}
 
-        historyWindow
+@MainActor
+final class TunnelMasterDelegate: NSObject, NSApplicationDelegate {
+    private lazy var store = TunnelStore()
+    private var statusPopover: StatusPopoverController?
+    private var historyWindow: NSWindowController?
+    private var pendingPopover = false
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        statusPopover = StatusPopoverController(store: store) { [weak self] in
+            self?.showHistory()
+        }
+        if pendingPopover { statusPopover?.showPinned() }
     }
 
-    private var historyWindow: some Scene {
-        Window("流量历史", id: "traffic-history") {
-            UsageHistoryView(store: store)
-        }
-        .handlesExternalEvents(matching: ["tunnelmaster://statistics"])
-        .defaultSize(width: 960, height: 780)
-        .commands {
-            CommandGroup(replacing: .appTermination) {
-                Button("退出 TunnelMaster", action: store.quit)
-                    .keyboardShortcut("q")
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls where url.scheme == "tunnelmaster" {
+            switch (url.host, url.path) {
+            case ("menu", ""):
+                openPopover()
+            case ("statistics", ""), ("statistics", "/"):
+                showHistory()
+            case ("statistics", "/digitalocean"):
+                UsageHistoryView.selectDigitalOcean()
+                showHistory()
+            default:
+                continue
             }
         }
     }
 
-    private static func globeImage(opacity: CGFloat) -> NSImage {
-        let symbol = NSImage(systemSymbolName: "globe", accessibilityDescription: nil)!
-        // The template adapts to the menu bar appearance while keeping the drawn opacity.
-        let image = NSImage(size: symbol.size, flipped: false) { rect in
-            symbol.draw(in: rect, from: .zero, operation: .sourceOver, fraction: opacity)
-            return true
-        }
-        image.isTemplate = true
-        return image
+    func applicationShouldHandleReopen(_ application: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        if !hasVisibleWindows { openPopover() }
+        return false
     }
 
-    private var menuBarTitle: String {
-        switch store.status {
-        case .connected: "TunnelMaster，已连接"
-        case .connecting: "TunnelMaster，正在连接"
-        case .disconnecting: "TunnelMaster，正在断开"
-        case .disconnected: "TunnelMaster，已断开"
+    func quit() {
+        store.quit()
+    }
+
+    private func openPopover() {
+        if let statusPopover {
+            statusPopover.showPinned()
+        } else {
+            pendingPopover = true
         }
+    }
+
+    private func showHistory() {
+        if historyWindow == nil {
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 960, height: 780),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                backing: .buffered, defer: false
+            )
+            window.title = "流量历史"
+            window.isReleasedWhenClosed = false
+            window.contentMinSize = NSSize(width: 760, height: 610)
+            window.contentViewController = NSHostingController(rootView: UsageHistoryView(store: store))
+            window.center()
+            window.setFrameAutosaveName("traffic-history")
+            historyWindow = NSWindowController(window: window)
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        historyWindow?.showWindow(nil)
+        historyWindow?.window?.makeKeyAndOrderFront(nil)
     }
 }

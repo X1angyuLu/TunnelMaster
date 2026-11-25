@@ -5,7 +5,8 @@ import SwiftUI
 @MainActor
 struct UsageHistoryView: View {
     @ObservedObject var store: TunnelStore
-    @AppStorage("usageHistorySource") private var sourcePreference = ""
+    private static let sourceKey = "usageHistorySource"
+    @AppStorage(UsageHistoryView.sourceKey) private var sourcePreference = ""
     @AppStorage("usageHistoryRange") private var range = UsageRange.week
     @StateObject private var state = UsageHistoryWindowState()
 
@@ -25,14 +26,10 @@ struct UsageHistoryView: View {
         }
         .frame(minWidth: 760, minHeight: 610)
         .background(Color(nsColor: .windowBackgroundColor))
-        .handlesExternalEvents(preferring: ["tunnelmaster://statistics"], allowing: ["tunnelmaster://statistics"])
-        .onOpenURL { url in
-            guard url.scheme == "tunnelmaster", url.host == "statistics" else { return }
-            if url.path == "/digitalocean" {
-                sourcePreference = HistoryDataSource.digitalOcean.rawValue
-            }
-            NSApp.activate(ignoringOtherApps: true)
-        }
+    }
+
+    static func selectDigitalOcean() {
+        UserDefaults.standard.set(HistoryDataSource.digitalOcean.rawValue, forKey: sourceKey)
     }
 
     private var localHistory: some View {

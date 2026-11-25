@@ -3,7 +3,6 @@ import SwiftUI
 
 @MainActor
 struct MenuView: View {
-    @Environment(\.openWindow) private var openWindow
     @ObservedObject var store: TunnelStore
     @ObservedObject private var serverSource: DigitalOceanSource
     @AppStorage("menuTrafficTab") private var selectedTab = MenuMetricsTab.live
@@ -11,10 +10,12 @@ struct MenuView: View {
     @StateObject private var editor = RuleEditorState()
     @StateObject private var metricsView = MenuMetricsState()
     @StateObject private var menuStats = MenuTrafficLoader()
+    private let openHistory: @MainActor () -> Void
 
-    init(store: TunnelStore) {
+    init(store: TunnelStore, openHistory: @escaping @MainActor () -> Void) {
         self.store = store
         _serverSource = ObservedObject(wrappedValue: store.digitalOcean)
+        self.openHistory = openHistory
     }
 
     var body: some View {
@@ -319,10 +320,7 @@ struct MenuView: View {
 
     private var footer: some View {
         HStack(spacing: 12) {
-            Button {
-                NSApp.activate(ignoringOtherApps: true)
-                openWindow(id: "traffic-history")
-            } label: {
+            Button(action: openHistory) {
                 Label("流量统计", systemImage: "chart.bar.xaxis")
             }
 

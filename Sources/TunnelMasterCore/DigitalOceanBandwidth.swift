@@ -11,6 +11,51 @@ public struct DigitalOceanBandwidthSeries: Sendable {
     public let estimatedBytes: Int64?
     public let coveredSeconds: TimeInterval
     public let peakMbps: Double?
+
+    private let window: DateInterval
+    private let observations: [BandwidthObservation]
+
+    fileprivate init(samples: [DigitalOceanBandwidthSample], observations: [BandwidthObservation], window: DateInterval) {
+        self.samples = samples
+        self.window = window
+        self.observations = observations
+        let estimate = Self.estimate(in: window, using: observations)
+        self.estimatedBytes = estimate.estimatedBytes.flatMap { Int64(exactly: $0.rounded()) }
+        self.coveredSeconds = estimate.coveredSeconds
+        self.peakMbps = samples.map(\.mbps).max()
+    }
+
+    /// Estimates bytes only from observed intervals that overlap both the query and the requested subrange.
+    public func estimate(in interval: DateInterval) -> (estimatedBytes: Double?, coveredSeconds: TimeInterval) {
+        guard let overlap = window.intersection(with: interval) else { return (nil, 0) }
+        return Self.estimate(in: overlap, using: observations)
+    }
+
+    private static func estimate(in interval: DateInterval, using observations: [BandwidthObservation])
+        -> (estimatedBytes: Double?, coveredSeconds: TimeInterval) {
+        let from = interval.start.timeIntervalSince1970
+        let until = interval.end.timeIntervalSince1970
+        var bytes = 0.0
+        var coverage = 0.0
+        for observation in observations {
+            let start = max(observation.start, from)
+            let end = min(observation.end, until)
+            guard start < end else { continue }
+            let midpoint = ((start - observation.start) + (end - observation.start))
+                / (2 * (observation.end - observation.start))
+            let averageMbps = observation.initialMbps * (1 - midpoint) + observation.finalMbps * midpoint
+            bytes += averageMbps * 125_000 * (end - start)
+            coverage += end - start
+        }
+        return (coverage > 0 && bytes.isFinite ? bytes : nil, coverage)
+    }
+}
+
+fileprivate struct BandwidthObservation: Sendable {
+    let start: TimeInterval
+    let end: TimeInterval
+    let initialMbps: Double
+    let finalMbps: Double
 }
 
 public struct DigitalOceanBandwidthReport: Sendable {
@@ -138,7 +183,7 @@ public struct DigitalOceanBandwidthClient: Sendable {
             }
             return try result.series(in: query.window)
         }
-        return DigitalOceanBandwidthSeries(samples: [], estimatedBytes: nil, coveredSeconds: 0, peakMbps: nil)
+        return DigitalOceanBandwidthSeries(samples: [], observations: [], window: query.window)
     }
 }
 
@@ -190,28 +235,21 @@ private struct BandwidthResponse: Decodable {
             }
             let pairs = zip(points, points.dropFirst())
             let intervals = pairs.map { $1.timestamp - $0.timestamp }.sorted()
-            var bytes = 0.0
-            var coverage = 0.0
-            if !intervals.isEmpty {
-                let cadence = intervals[(intervals.count - 1) / 2]
-                // Estimate only between nearby samples. A missing or nonfinite reading breaks coverage.
-                let maxGap = min(cadence * 1.5, 30 * 60)
-                for (first, second) in pairs {
-                    let interval = second.timestamp - first.timestamp
-                    let start = max(first.timestamp, from)
-                    let end = min(second.timestamp, until)
-                    guard interval <= maxGap, end > start, let initial = first.mbps, let next = second.mbps else { continue }
-                    let midpoint = ((start - first.timestamp) + (end - first.timestamp)) / (2 * interval)
-                    let averageMbps = initial * (1 - midpoint) + next * midpoint
-                    bytes += averageMbps * 125_000 * (end - start)
-                    coverage += end - start
-                }
+            guard !intervals.isEmpty else {
+                return DigitalOceanBandwidthSeries(samples: samples, observations: [], window: window)
+            }
+            let cadence = intervals[(intervals.count - 1) / 2]
+            // Estimate only between nearby samples. A missing or nonfinite reading breaks coverage.
+            let maxGap = min(cadence * 1.5, 30 * 60)
+            let observations = pairs.compactMap { first, second -> BandwidthObservation? in
+                guard second.timestamp - first.timestamp <= maxGap, first.timestamp < until, second.timestamp > from,
+                      let initial = first.mbps, let next = second.mbps else { return nil }
+                return BandwidthObservation(
+                    start: first.timestamp, end: second.timestamp, initialMbps: initial, finalMbps: next
+                )
             }
             return DigitalOceanBandwidthSeries(
-                samples: samples,
-                estimatedBytes: coverage > 0 ? Int64(exactly: bytes.rounded()) : nil,
-                coveredSeconds: coverage,
-                peakMbps: samples.map(\.mbps).max()
+                samples: samples, observations: observations, window: window
             )
         }
     }

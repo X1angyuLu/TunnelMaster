@@ -5,6 +5,11 @@ import TunnelMasterCore
 
 @MainActor
 final class DigitalOceanSource: ObservableObject {
+    struct Snapshot: Sendable {
+        let report: DigitalOceanBandwidthReport
+        let fetchedAt: Date
+    }
+
     @Published private(set) var dropletID: String?
     @Published private(set) var report: DigitalOceanBandwidthReport?
     @Published private(set) var lastUpdated: Date?
@@ -16,6 +21,9 @@ final class DigitalOceanSource: ObservableObject {
     private let preference = "digitalOceanDropletID"
     private var requestID: UUID?
     private var reportDays: Int?
+    private var snapshots: [Int: Snapshot] = [:]
+    private var pending: [Int: Task<Snapshot, Error>] = [:]
+    private var credentialRevision = UUID()
 
     init() {
         dropletID = defaults.string(forKey: preference)
@@ -32,9 +40,12 @@ final class DigitalOceanSource: ObservableObject {
         try Task.checkCancellation()
         guard requestID == request else { throw CancellationError() }
         try MonitoringKeychain.store(credential)
+        clearSnapshots()
         self.dropletID = credential.dropletID
         defaults.set(credential.dropletID, forKey: preference)
-        updateReport(initial, days: 1)
+        let snapshot = Snapshot(report: initial, fetchedAt: .now)
+        snapshots[1] = snapshot
+        updateReport(snapshot, days: 1)
     }
 
     func load(days: Int) async {
@@ -46,8 +57,7 @@ final class DigitalOceanSource: ObservableObject {
         }
         defer { finishRequest(request) }
         do {
-            let credential = try MonitoringKeychain.load()
-            let result = try await fetch(credential, days: days)
+            let result = try await bandwidth(days: days, maxAge: 0)
             try Task.checkCancellation()
             guard requestID == request else { return }
             updateReport(result, days: days)
@@ -61,6 +71,7 @@ final class DigitalOceanSource: ObservableObject {
 
     func removeCredentials() throws {
         try MonitoringKeychain.remove()
+        clearSnapshots()
         requestID = nil
         isLoading = false
         errorMessage = nil
@@ -69,6 +80,40 @@ final class DigitalOceanSource: ObservableObject {
         lastUpdated = nil
         reportDays = nil
         defaults.removeObject(forKey: preference)
+    }
+
+    func bandwidth(days: Int, maxAge: TimeInterval) async throws -> Snapshot {
+        guard let dropletID else { throw DigitalOceanBandwidthError.invalidDropletID }
+        try Task.checkCancellation()
+        if let snapshot = snapshots[days], maxAge > 0,
+           abs(snapshot.fetchedAt.timeIntervalSinceNow) < maxAge {
+            return snapshot
+        }
+        let revision = credentialRevision
+        if let request = pending[days] {
+            let snapshot = try await request.value
+            guard credentialRevision == revision else { throw CancellationError() }
+            return snapshot
+        }
+
+        let credential = try MonitoringKeychain.load()
+        guard credential.dropletID == dropletID else { throw DigitalOceanBandwidthError.invalidDropletID }
+        let request = Task { Snapshot(report: try await fetch(credential, days: days), fetchedAt: .now) }
+        pending[days] = request
+        defer {
+            if credentialRevision == revision { pending[days] = nil }
+        }
+        let snapshot = try await request.value
+        guard credentialRevision == revision else { throw CancellationError() }
+        snapshots[days] = snapshot
+        return snapshot
+    }
+
+    private func clearSnapshots() {
+        credentialRevision = UUID()
+        pending.values.forEach { $0.cancel() }
+        pending.removeAll()
+        snapshots.removeAll()
     }
 
     private func beginRequest() -> UUID {
@@ -93,10 +138,10 @@ final class DigitalOceanSource: ObservableObject {
         )
     }
 
-    private func updateReport(_ report: DigitalOceanBandwidthReport, days: Int) {
-        self.report = report
+    private func updateReport(_ snapshot: Snapshot, days: Int) {
+        report = snapshot.report
         reportDays = days
-        lastUpdated = .now
+        lastUpdated = snapshot.fetchedAt
     }
 }
 

@@ -5,7 +5,17 @@ import SwiftUI
 struct MenuView: View {
     @Environment(\.openWindow) private var openWindow
     @ObservedObject var store: TunnelStore
+    @ObservedObject private var serverSource: DigitalOceanSource
+    @AppStorage("menuTrafficTab") private var selectedTab = MenuMetricsTab.live
+    @AppStorage("menuTrafficRange") private var selectedRange = MenuTrafficRange.day
     @StateObject private var editor = RuleEditorState()
+    @StateObject private var metricsView = MenuMetricsState()
+    @StateObject private var menuStats = MenuTrafficLoader()
+
+    init(store: TunnelStore) {
+        self.store = store
+        _serverSource = ObservedObject(wrappedValue: store.digitalOcean)
+    }
 
     var body: some View {
         Group {
@@ -15,21 +25,18 @@ struct MenuView: View {
                 overview
             }
         }
-        .padding(16)
-        .frame(width: 370)
+        .padding(15)
+        .frame(width: 394)
         .onAppear { store.refresh() }
     }
 
     private var overview: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let request = metricsRequest
+        return VStack(alignment: .leading, spacing: 10) {
             header
-            TrafficDashboard(
-                isConnected: isConnected,
-                connectedAt: store.connectedAt,
-                traffic: store.traffic,
-                history: store.trafficHistory
-            )
             connectionCard
+            metricsToolbar
+            metricsCard
             modePicker
 
             VStack(alignment: .leading, spacing: 6) {
@@ -81,21 +88,23 @@ struct MenuView: View {
             Divider()
             footer
         }
-        .onAppear { store.setMetricsVisible(true) }
+        .onAppear { store.setMetricsVisible(activeTab == .live) }
+        .onChange(of: activeTab) { store.setMetricsVisible($0 == .live) }
         .onDisappear { store.setMetricsVisible(false) }
+        .task(id: request) { await loadMetrics(request) }
     }
 
     private var header: some View {
         HStack(spacing: 10) {
-            Image(systemName: "globe")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(Color.accentColor)
-                .frame(width: 32, height: 32)
-                .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+            Image(systemName: "globe.asia.australia")
+                .font(.system(size: 18, weight: .medium))
+                .foregroundStyle(isConnected ? Color.teal : Color.secondary)
+                .frame(width: 34, height: 34)
+                .background((isConnected ? Color.teal : Color.secondary).opacity(0.13), in: RoundedRectangle(cornerRadius: 9))
                 .accessibilityHidden(true)
 
             Text("TunnelMaster")
-                .font(.system(.headline, design: .rounded))
+                .font(.system(size: 16, weight: .semibold, design: .rounded))
 
             Spacer(minLength: 6)
 
@@ -113,28 +122,34 @@ struct MenuView: View {
     }
 
     private var connectionCard: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                Label("配置", systemImage: "point.3.connected.trianglepath.dotted")
+        HStack(spacing: 11) {
+            VStack(alignment: .leading, spacing: 4) {
+                Label("节点", systemImage: "point.3.connected.trianglepath.dotted")
+                    .font(.caption2)
                     .foregroundStyle(.secondary)
-                Spacer()
                 Text(store.profileName ?? "尚未选择")
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .fontWeight(.medium)
             }
-            .padding(.horizontal, 11)
-            .frame(minHeight: 38)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .combine)
 
-            Divider().padding(.leading, 11)
+            Divider().frame(height: 27)
 
-            HStack(spacing: 8) {
-                Label("出口 IP", systemImage: "globe.americas")
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Text(store.exitIP ?? "—")
-                    .font(.system(.callout, design: .monospaced))
-                    .textSelection(.enabled)
+            HStack(alignment: .center, spacing: 5) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Label("出口 IP", systemImage: "globe.americas")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text(store.exitIP ?? "—")
+                        .font(.system(.callout, design: .monospaced))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
+                .accessibilityElement(children: .combine)
+                Spacer(minLength: 0)
 
                 Button(action: store.checkExit) {
                     if store.checkingExit {
@@ -151,11 +166,125 @@ struct MenuView: View {
                 .help("检测当前出口 IP")
                 .accessibilityLabel("检测当前出口 IP")
             }
-            .padding(.horizontal, 11)
-            .frame(minHeight: 38)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .padding(.horizontal, 11)
+        .frame(minHeight: 49)
         .font(.callout)
         .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private var metricsToolbar: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 2) {
+                ForEach(availableTabs) { tab in
+                    statsButton(tab.title, icon: tab.icon, selected: activeTab == tab) { selectedTab = tab }
+                }
+            }
+            .padding(2)
+            .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 7))
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("流量视图")
+
+            Spacer(minLength: 0)
+
+            if activeTab == .live {
+                Text("最近 60 秒")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .padding(.trailing, 2)
+            } else {
+                HStack(spacing: 1) {
+                    ForEach(MenuTrafficRange.allCases) { range in
+                        statsButton(range.title, selected: selectedRange == range) { selectedRange = range }
+                    }
+                }
+                .padding(2)
+                .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 7))
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("统计时间范围")
+
+                if activeTab == .server {
+                    Button {
+                        metricsView.refresh += 1
+                    } label: {
+                        Image(systemName: "arrow.clockwise").frame(width: 18, height: 22)
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption.weight(.medium))
+                    .disabled(menuStats.isLoading)
+                    .help("刷新服务器流量")
+                    .accessibilityLabel("刷新服务器流量")
+                }
+            }
+        }
+        .frame(height: 29)
+    }
+
+    private func statsButton(_ title: String, icon: String? = nil, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                if let icon { Image(systemName: icon).accessibilityHidden(true) }
+                Text(title).lineLimit(1)
+            }
+            .font(.caption.weight(selected ? .semibold : .medium))
+            .foregroundStyle(selected ? .primary : .secondary)
+            .padding(.horizontal, 7)
+            .frame(height: 23)
+            .background(selected ? Color(nsColor: .controlBackgroundColor) : .clear,
+                        in: RoundedRectangle(cornerRadius: 5))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    @ViewBuilder
+    private var metricsCard: some View {
+        if activeTab == .live {
+            TrafficDashboard(isConnected: isConnected, connectedAt: store.connectedAt,
+                             traffic: store.traffic, history: store.trafficHistory)
+        } else {
+            let scope = metricsRequest.scope
+            let completed = metricsView.completedScope == scope
+            MenuHistoryCard(
+                report: menuStats.report(for: scope.range, serverID: scope.dropletID), range: scope.range,
+                isServer: activeTab == .server, isLoading: !completed || menuStats.isLoading,
+                errorMessage: completed ? menuStats.errorMessage : nil
+            )
+            .id(scope)
+        }
+    }
+
+    private var availableTabs: [MenuMetricsTab] {
+        serverSource.dropletID == nil ? [.live, .local] : MenuMetricsTab.allCases
+    }
+
+    private var activeTab: MenuMetricsTab {
+        availableTabs.contains(selectedTab) ? selectedTab : .live
+    }
+
+    private var metricsRequest: MenuMetricsRequest {
+        MenuMetricsRequest(
+            scope: MenuMetricsScope(tab: activeTab, range: selectedRange,
+                                    dropletID: activeTab == .server ? serverSource.dropletID : nil),
+            revision: activeTab == .local ? store.historyRevision : 0,
+            refresh: activeTab == .server ? metricsView.refresh : 0
+        )
+    }
+
+    private func loadMetrics(_ request: MenuMetricsRequest) async {
+        switch request.scope.tab {
+        case .live:
+            return
+        case .local:
+            await menuStats.loadLocal(store: store, range: request.scope.range)
+        case .server:
+            let force = request.refresh != metricsView.completedRefresh
+            await menuStats.loadServer(source: serverSource, range: request.scope.range, force: force)
+            if !Task.isCancelled { metricsView.completedRefresh = request.refresh }
+        }
+        if !Task.isCancelled { metricsView.completedScope = request.scope }
     }
 
     private var modePicker: some View {
@@ -350,6 +479,44 @@ struct MenuView: View {
         case .disconnected: "连接"
         }
     }
+}
+
+private enum MenuMetricsTab: String, CaseIterable, Identifiable {
+    case live, local, server
+    var id: Self { self }
+    var title: String {
+        switch self {
+        case .live: "实时"
+        case .local: "本机"
+        case .server: "服务器"
+        }
+    }
+    var icon: String {
+        switch self {
+        case .live: "waveform"
+        case .local: "laptopcomputer"
+        case .server: "server.rack"
+        }
+    }
+}
+
+private struct MenuMetricsScope: Hashable {
+    let tab: MenuMetricsTab
+    let range: MenuTrafficRange
+    let dropletID: String?
+}
+
+private struct MenuMetricsRequest: Equatable {
+    let scope: MenuMetricsScope
+    let revision: Int
+    let refresh: Int
+}
+
+@MainActor
+private final class MenuMetricsState: ObservableObject {
+    @Published var refresh = 0
+    @Published var completedScope: MenuMetricsScope?
+    var completedRefresh = 0
 }
 
 @MainActor

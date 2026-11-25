@@ -108,8 +108,10 @@ struct DigitalOceanUsageView: View {
                     legend("出站", color: Self.outboundColor, symbol: "diamond.fill")
                 }
                 if latest != nil {
-                    bandwidthChart(report)
-                        .frame(height: 211)
+                    DigitalOceanBandwidthChart(
+                        report: report, axisGranularity: range == .day ? .hour : .day,
+                        inboundColor: Self.inboundColor, outboundColor: Self.outboundColor
+                    )
                 } else {
                     VStack(spacing: 8) {
                         Image(systemName: "chart.xyaxis.line").font(.title2).accessibilityHidden(true)
@@ -158,59 +160,6 @@ struct DigitalOceanUsageView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .modifier(DigitalOceanPanel())
-    }
-
-    private func bandwidthChart(_ report: DigitalOceanBandwidthReport) -> some View {
-        let inbound = Self.chartSamples(report.inbound.samples)
-        let outbound = Self.chartSamples(report.outbound.samples)
-        let peak = max(report.inbound.peakMbps ?? 0, report.outbound.peakMbps ?? 0)
-        return Chart {
-            ForEach(inbound) { sample in
-                PointMark(x: .value("时间", sample.timestamp), y: .value("入站 Mbps", sample.mbps))
-                    .foregroundStyle(Self.inboundColor.opacity(0.8))
-                    .symbol(.circle).symbolSize(10)
-            }
-            ForEach(outbound) { sample in
-                PointMark(x: .value("时间", sample.timestamp), y: .value("出站 Mbps", sample.mbps))
-                    .foregroundStyle(Self.outboundColor.opacity(0.8))
-                    .symbol(.diamond).symbolSize(13)
-            }
-        }
-        .chartXScale(domain: report.from...report.until)
-        .chartYScale(domain: 0...max(0.01, peak * 1.08))
-        .chartXAxis {
-            AxisMarks(values: .automatic(desiredCount: 6)) { value in
-                AxisTick().foregroundStyle(.secondary.opacity(0.35))
-                AxisValueLabel {
-                    if let date = value.as(Date.self) {
-                        Text((range == .day ? UsageGranularity.hour : .day).axisLabel(date))
-                    }
-                }
-            }
-        }
-        .chartYAxis {
-            AxisMarks(position: .leading, values: .automatic(desiredCount: 5)) { value in
-                AxisGridLine().foregroundStyle(.secondary.opacity(0.2))
-                AxisValueLabel {
-                    if let speed = value.as(Double.self) {
-                        Text(rate(speed))
-                    }
-                }
-            }
-        }
-        .accessibilityLabel("Droplet 公网入站和出站带宽，单位 Mbps")
-    }
-
-    // Retain the range of observed values at a readable density on long charts.
-    private static func chartSamples(_ samples: [DigitalOceanBandwidthSample]) -> [DigitalOceanBandwidthSample] {
-        guard samples.count > 1_000 else { return samples }
-        let strideSize = (samples.count + 499) / 500
-        return stride(from: 0, to: samples.count, by: strideSize).flatMap { start -> [DigitalOceanBandwidthSample] in
-            let group = samples[start..<min(start + strideSize, samples.count)]
-            guard let low = group.min(by: { $0.mbps < $1.mbps }),
-                  let high = group.max(by: { $0.mbps < $1.mbps }) else { return [] }
-            return low.id == high.id ? [low] : [low, high]
-        }
     }
 
     private func legend(_ title: String, color: Color, symbol: String) -> some View {
@@ -346,6 +295,296 @@ struct DigitalOceanUsageView: View {
         let dropletID: String?
         let range: DigitalOceanUsageRange
         let refresh: Int
+    }
+}
+
+@MainActor
+private struct DigitalOceanBandwidthChart: View {
+    let report: DigitalOceanBandwidthReport
+    let axisGranularity: UsageGranularity
+    let inboundColor: Color
+    let outboundColor: Color
+
+    @StateObject private var inspection = Inspection()
+
+    private let samples: DigitalOceanChartSamples
+    private let inboundMarks: [DigitalOceanBandwidthSample]
+    private let outboundMarks: [DigitalOceanBandwidthSample]
+
+    init(report: DigitalOceanBandwidthReport, axisGranularity: UsageGranularity, inboundColor: Color, outboundColor: Color) {
+        self.report = report
+        self.axisGranularity = axisGranularity
+        self.inboundColor = inboundColor
+        self.outboundColor = outboundColor
+        samples = DigitalOceanChartSamples(inbound: report.inbound.samples, outbound: report.outbound.samples)
+        inboundMarks = Self.chartSamples(report.inbound.samples)
+        outboundMarks = Self.chartSamples(report.outbound.samples)
+    }
+
+    private enum Hover: Equatable {
+        case sample(Date)
+        case gap
+    }
+
+    @MainActor
+    private final class Inspection: ObservableObject {
+        @Published var hover: Hover?
+        @Published var pinnedDate: Date?
+    }
+
+    private var selectedDate: Date? {
+        switch inspection.hover {
+        case .sample(let date): return date
+        case .gap: return nil
+        case nil:
+            guard let pinnedDate = inspection.pinnedDate, samples.contains(pinnedDate) else { return nil }
+            return pinnedDate
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            chart
+                .frame(height: 211)
+            inspector
+        }
+        .onChange(of: report.until) { _ in
+            inspection.hover = nil
+            if let pinnedDate = inspection.pinnedDate, !samples.contains(pinnedDate) { inspection.pinnedDate = nil }
+        }
+    }
+
+    private var chart: some View {
+        let peak = max(report.inbound.peakMbps ?? 0, report.outbound.peakMbps ?? 0)
+        return Chart {
+            ForEach(inboundMarks) { sample in
+                PointMark(x: .value("时间", sample.timestamp), y: .value("入站 Mbps", sample.mbps))
+                    .foregroundStyle(inboundColor.opacity(0.8))
+                    .symbol(.circle).symbolSize(10)
+            }
+            ForEach(outboundMarks) { sample in
+                PointMark(x: .value("时间", sample.timestamp), y: .value("出站 Mbps", sample.mbps))
+                    .foregroundStyle(outboundColor.opacity(0.8))
+                    .symbol(.diamond).symbolSize(13)
+            }
+            if let date = selectedDate {
+                RuleMark(x: .value("选中采样", date))
+                    .foregroundStyle(.secondary.opacity(0.65))
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                if let inbound = samples.inbound[date] {
+                    PointMark(x: .value("时间", date), y: .value("入站 Mbps", inbound))
+                        .foregroundStyle(inboundColor)
+                        .symbol(.circle).symbolSize(48)
+                }
+                if let outbound = samples.outbound[date] {
+                    PointMark(x: .value("时间", date), y: .value("出站 Mbps", outbound))
+                        .foregroundStyle(outboundColor)
+                        .symbol(.diamond).symbolSize(54)
+                }
+            }
+        }
+        .chartXScale(domain: report.from...report.until)
+        .chartYScale(domain: 0...max(0.01, peak * 1.08))
+        .chartXAxis {
+            AxisMarks(values: .automatic(desiredCount: 6)) { value in
+                AxisTick().foregroundStyle(.secondary.opacity(0.35))
+                AxisValueLabel {
+                    if let date = value.as(Date.self) { Text(axisGranularity.axisLabel(date)) }
+                }
+            }
+        }
+        .chartYAxis {
+            AxisMarks(position: .leading, values: .automatic(desiredCount: 5)) { value in
+                AxisGridLine().foregroundStyle(.secondary.opacity(0.2))
+                AxisValueLabel {
+                    if let speed = value.as(Double.self) {
+                        Text(speed.formatted(.number.precision(.fractionLength(0...3))))
+                    }
+                }
+            }
+        }
+        .chartOverlay { proxy in selectionOverlay(proxy) }
+        .focusable()
+        .onMoveCommand { move in
+            switch move {
+            case .left: browse(-1)
+            case .right: browse(1)
+            default: break
+            }
+        }
+        .onExitCommand {
+            inspection.hover = nil
+            inspection.pinnedDate = nil
+        }
+        .accessibilityLabel("Droplet 公网入站和出站带宽，单位 Mbps")
+        .accessibilityValue(accessibleSelection)
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .decrement: browse(-1)
+            case .increment: browse(1)
+            @unknown default: break
+            }
+        }
+    }
+
+    private func selectionOverlay(_ proxy: ChartProxy) -> some View {
+        GeometryReader { geometry in
+            let plot = geometry[proxy.plotAreaFrame]
+            Rectangle()
+                .fill(.clear)
+                .contentShape(Rectangle())
+                .onContinuousHover { phase in
+                    let next: Hover?
+                    if case .active(let point) = phase, let date = date(at: point, plot: plot, proxy: proxy) {
+                        next = samples.nearest(to: date).map(Hover.sample) ?? .gap
+                    } else {
+                        next = nil
+                    }
+                    if next != inspection.hover { inspection.hover = next }
+                }
+                .gesture(SpatialTapGesture().onEnded { value in
+                    guard let target = date(at: value.location, plot: plot, proxy: proxy) else { return }
+                    let sample = samples.nearest(to: target)
+                    inspection.pinnedDate = inspection.pinnedDate == sample ? nil : sample
+                })
+                .accessibilityHidden(true)
+        }
+    }
+
+    private func date(at point: CGPoint, plot: CGRect, proxy: ChartProxy) -> Date? {
+        guard plot.contains(point) else { return nil }
+        return proxy.value(atX: point.x - plot.minX)
+    }
+
+    private var inspector: some View {
+        HStack(spacing: 11) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("采样时间").foregroundStyle(.secondary)
+                Text(selectionTitle).fontWeight(.medium).lineLimit(1)
+            }
+            .frame(minWidth: 145, alignment: .leading)
+            reading("入站", date: selectedDate, series: samples.inbound, color: inboundColor)
+            reading("出站", date: selectedDate, series: samples.outbound, color: outboundColor)
+
+            Button { browse(-1) } label: { Image(systemName: "chevron.left") }
+                .disabled(!canBrowse(-1))
+                .help("上一条采样")
+                .accessibilityLabel("上一条采样")
+            Button { browse(1) } label: { Image(systemName: "chevron.right") }
+                .disabled(!canBrowse(1))
+                .help("下一条采样")
+                .accessibilityLabel("下一条采样")
+        }
+        .font(.caption.monospacedDigit())
+        .controlSize(.small)
+        .padding(.horizontal, 11)
+        .padding(.vertical, 6)
+        .frame(minHeight: 42)
+        .background(.quaternary.opacity(0.48), in: RoundedRectangle(cornerRadius: 7))
+    }
+
+    private func reading(_ title: String, date: Date?, series: [Date: Double], color: Color) -> some View {
+        let value = rateText(date.flatMap { series[$0] })
+        return VStack(alignment: .leading, spacing: 3) {
+            Text(title).foregroundStyle(color)
+            Text(value ?? "—").lineLimit(1).minimumScaleFactor(0.75)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+        .accessibilityValue(value ?? "无采样")
+    }
+
+    private var selectionTitle: String {
+        guard let selectedDate else { return inspection.hover == .gap ? "此处附近无采样" : "悬停或选取采样点" }
+        return selectedDate.formatted(.dateTime.year().month().day()
+            .hour(.twoDigits(amPM: .omitted)).minute(.twoDigits).second(.twoDigits).locale(UsageFormat.locale))
+    }
+
+    private var accessibleSelection: String {
+        guard let selectedDate else { return selectionTitle }
+        let inbound = rateText(samples.inbound[selectedDate]) ?? "无采样"
+        let outbound = rateText(samples.outbound[selectedDate]) ?? "无采样"
+        return "\(selectionTitle)，入站 \(inbound)，出站 \(outbound)"
+    }
+
+    private func rateText(_ mbps: Double?) -> String? {
+        mbps.map { "\($0.formatted(.number.precision(.significantDigits(1...8)))) Mbps" }
+    }
+
+    private func canBrowse(_ offset: Int) -> Bool {
+        samples.adjacent(to: selectedDate ?? inspection.pinnedDate, offset: offset) != nil
+    }
+
+    private func browse(_ offset: Int) {
+        guard let next = samples.adjacent(to: selectedDate ?? inspection.pinnedDate, offset: offset) else { return }
+        inspection.pinnedDate = next
+        inspection.hover = nil
+    }
+
+    // Retain plotted extremes on long ranges. Hit testing always uses the full samples instead.
+    private static func chartSamples(_ samples: [DigitalOceanBandwidthSample]) -> [DigitalOceanBandwidthSample] {
+        guard samples.count > 1_000 else { return samples }
+        let strideSize = (samples.count + 499) / 500
+        return stride(from: 0, to: samples.count, by: strideSize).flatMap { start -> [DigitalOceanBandwidthSample] in
+            let group = samples[start..<min(start + strideSize, samples.count)]
+            guard let low = group.min(by: { $0.mbps < $1.mbps }),
+                  let high = group.max(by: { $0.mbps < $1.mbps }) else { return [] }
+            return low.id == high.id ? [low] : [low, high]
+        }
+    }
+}
+
+private struct DigitalOceanChartSamples {
+    let inbound: [Date: Double]
+    let outbound: [Date: Double]
+    private let dates: [Date]
+    private let tolerance: TimeInterval
+
+    init(inbound: [DigitalOceanBandwidthSample], outbound: [DigitalOceanBandwidthSample]) {
+        self.inbound = Dictionary(uniqueKeysWithValues: inbound.map { ($0.timestamp, $0.mbps) })
+        self.outbound = Dictionary(uniqueKeysWithValues: outbound.map { ($0.timestamp, $0.mbps) })
+        dates = Set(self.inbound.keys).union(self.outbound.keys).sorted()
+        // Infer cadence within a direction so a small timestamp skew between directions has no effect.
+        let distinctCadences = [Self.cadence(inbound), Self.cadence(outbound)].compactMap { $0 }
+        tolerance = min(15 * 60, (distinctCadences.min() ?? 60) / 2)
+    }
+
+    func contains(_ date: Date) -> Bool {
+        inbound[date] != nil || outbound[date] != nil
+    }
+
+    func nearest(to date: Date) -> Date? {
+        let index = insertionIndex(for: date)
+        let candidate = [index - 1, index].compactMap { dates.indices.contains($0) ? dates[$0] : nil }.min {
+            abs($0.timeIntervalSince(date)) < abs($1.timeIntervalSince(date))
+        }
+        guard let candidate, abs(candidate.timeIntervalSince(date)) <= tolerance else { return nil }
+        return candidate
+    }
+
+    func adjacent(to date: Date?, offset: Int) -> Date? {
+        guard let date, contains(date) else { return offset < 0 ? dates.last : dates.first }
+        let next = insertionIndex(for: date) + offset
+        return dates.indices.contains(next) ? dates[next] : nil
+    }
+
+    private func insertionIndex(for date: Date) -> Int {
+        var lowerBound = 0
+        var upperBound = dates.count
+        while lowerBound < upperBound {
+            let middle = (lowerBound + upperBound) / 2
+            if dates[middle] < date { lowerBound = middle + 1 }
+            else { upperBound = middle }
+        }
+        return lowerBound
+    }
+
+    private static func cadence(_ samples: [DigitalOceanBandwidthSample]) -> TimeInterval? {
+        let intervals = zip(samples, samples.dropFirst()).map { $1.timestamp.timeIntervalSince($0.timestamp) }
+            .filter { $0 > 0 }.sorted()
+        guard !intervals.isEmpty else { return nil }
+        return intervals[(intervals.count - 1) / 2]
     }
 }
 

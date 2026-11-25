@@ -53,6 +53,28 @@ struct DigitalOceanBandwidthTests {
         #expect(report.outbound.peakMbps == 4)
     }
 
+    @Test func subrangeEstimatesReconcileWithTotalsAcrossMeasuredAndMissingHours() async throws {
+        let client = stub { _, direction in
+            let samples = """
+            [[3480,"8"],[3540,"8"],[3600,"8"],[3660,"8"],[3720,"NaN"],[7200,"0"],[7260,"0"],[7320,"NaN"]]
+            """
+            return Self.matrix(Self.series(direction, samples))
+        }
+        let window = interval(3500, 7400)
+        let report = try await client.report(
+            dropletID: "123", token: "fixture-token", from: window.start, until: window.end
+        )
+        let series = report.inbound
+        let hours = [interval(0, 3600), interval(3600, 7200), interval(7200, 10800)]
+        let estimates = hours.map { series.estimate(in: $0) }
+        #expect(estimates.map(\.estimatedBytes) == [100_000_000, 60_000_000, 0])
+        #expect(estimates.map(\.coveredSeconds) == [100, 60, 60])
+        #expect(series.estimate(in: interval(3660, 7200)).estimatedBytes == nil)
+        #expect(series.estimate(in: interval(3660, 7200)).coveredSeconds == 0)
+        #expect(estimates.compactMap(\.estimatedBytes).reduce(0, +) == Double(series.estimatedBytes ?? -1))
+        #expect(estimates.map(\.coveredSeconds).reduce(0, +) == series.coveredSeconds)
+    }
+
     @Test func rejectsUnexpectedOrMismatchedSeries() async {
         let multiple = stub { _, direction in
             let metric = Self.series(direction, "[]")
@@ -87,6 +109,10 @@ struct DigitalOceanBandwidthTests {
             dropletID: "123", token: "fixture-token",
             from: Date(timeIntervalSince1970: 120), until: Date(timeIntervalSince1970: 360)
         )
+    }
+
+    private func interval(_ start: TimeInterval, _ end: TimeInterval) -> DateInterval {
+        DateInterval(start: Date(timeIntervalSince1970: start), end: Date(timeIntervalSince1970: end))
     }
 
     private func stub(

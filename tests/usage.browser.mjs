@@ -23,7 +23,10 @@ try {
     configFile: false,
     logLevel: 'silent',
     resolve: { alias: { '@': resolve('src') } },
-    define: { OS_PLATFORM: JSON.stringify(process.platform) },
+    define: {
+      OS_PLATFORM: JSON.stringify(process.platform),
+      'process.env.NODE_ENV': '"production"',
+    },
     build: {
       write: false,
       lib: {

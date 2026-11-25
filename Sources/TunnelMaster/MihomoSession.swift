@@ -9,6 +9,8 @@ enum SessionError: LocalizedError {
     case geoIPUnavailable
     case exitUnavailable
     case metricsUnavailable
+    case ruleReloadFailed
+    case handoffFailed
 
     var errorDescription: String? {
         switch self {
@@ -18,6 +20,8 @@ enum SessionError: LocalizedError {
         case .geoIPUnavailable: return "无法下载中国大陆 IP 数据。可以关闭 IP 分流后仅用域名规则。"
         case .exitUnavailable: return "未能验证公网出口。"
         case .metricsUnavailable: return "暂时无法读取流量统计。"
+        case .ruleReloadFailed: return "Mihomo 未确认新的分流规则。"
+        case .handoffFailed: return "无法安全接管正在运行的 Mihomo 会话。"
         }
     }
 }
@@ -70,18 +74,48 @@ enum MacCommand {
 }
 
 final class MihomoSession: @unchecked Sendable {
-    private let process: Process
+    private enum Engine {
+        case launched(Process)
+        case adopted(AdoptedMihomoProcess)
+    }
+
+    private let engine: Engine
     private let home: URL
     private let metricsSocket: URL?
     let port: Int
 
-    var isRunning: Bool { process.isRunning }
+    var processID: Int32 {
+        switch engine {
+        case .launched(let process): process.processIdentifier
+        case .adopted(let process): process.pid
+        }
+    }
 
-    private init(process: Process, home: URL, port: Int, metricsSocket: URL?) {
-        self.process = process
+    var isRunning: Bool {
+        switch engine {
+        case .launched(let process): process.isRunning
+        case .adopted(let process): process.isRunning
+        }
+    }
+
+    var workingDirectory: URL { home }
+    var metricsSocketURL: URL? { metricsSocket }
+
+    private init(engine: Engine, home: URL, port: Int, metricsSocket: URL?) {
+        self.engine = engine
         self.home = home
         self.port = port
         self.metricsSocket = metricsSocket
+    }
+
+    static func adopt(pid: Int32, workingDirectory: URL, port: Int, metricsSocket: URL) throws -> MihomoSession {
+        guard let executable else { throw SessionError.handoffFailed }
+        let process = try AdoptedMihomoProcess(
+            pid: pid, executable: executable, workingDirectory: workingDirectory, port: port, metricsSocket: metricsSocket
+        )
+        let session = MihomoSession(engine: .adopted(process), home: workingDirectory, port: port, metricsSocket: metricsSocket)
+        _ = try session.readMetrics()
+        return session
     }
 
     static var executable: String? {
@@ -106,14 +140,8 @@ final class MihomoSession: @unchecked Sendable {
 
         do {
             let port = try localPort()
-            var database: URL?
-            if let geoIP {
-                let target = home.appendingPathComponent("Country.mmdb")
-                try fileManager.copyItem(at: geoIP, to: target)
-                database = target
-            }
-            let data = try MihomoConfiguration.make(
-                profile: profile, rules: rules, port: port, chinaIPDatabasePath: database?.path
+            let data = try configuration(
+                profile: profile, rules: rules, port: port, geoIP: geoIP, home: home
             )
             try data.write(to: config, options: .atomic)
             try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: config.path)
@@ -132,7 +160,7 @@ final class MihomoSession: @unchecked Sendable {
                    process.isRunning {
                     // Mihomo has loaded the configuration; avoid retaining a second private-key copy.
                     try fileManager.removeItem(at: config)
-                    return MihomoSession(process: process, home: home, port: port, metricsSocket: metricsSocket)
+                    return MihomoSession(engine: .launched(process), home: home, port: port, metricsSocket: metricsSocket)
                 }
                 Thread.sleep(forTimeInterval: 0.15)
             }
@@ -149,16 +177,21 @@ final class MihomoSession: @unchecked Sendable {
     }
 
     func stop() {
-        if process.isRunning {
-            process.terminate()
-            process.waitUntilExit()
+        switch engine {
+        case .launched(let process):
+            if process.isRunning {
+                process.terminate()
+                process.waitUntilExit()
+            }
+        case .adopted(let process):
+            guard process.terminateAndWait(), process.mayRemoveDirectories else { return }
         }
         try? FileManager.default.removeItem(at: home)
         Self.removeMetricsSocketDirectory(for: metricsSocket)
     }
 
     func readMetrics() throws -> MihomoMetrics {
-        guard isRunning, let metricsSocket, FileManager.default.fileExists(atPath: metricsSocket.path) else {
+        guard let metricsSocket = verifiedMetricsSocket else {
             throw SessionError.metricsUnavailable
         }
         let result = try MacCommand.capture("/usr/bin/curl", arguments: [
@@ -169,6 +202,63 @@ final class MihomoSession: @unchecked Sendable {
         let metrics = try JSONDecoder().decode(MihomoMetrics.self, from: Data(result.output.utf8))
         guard metrics.downloadTotal >= 0, metrics.uploadTotal >= 0 else { throw SessionError.metricsUnavailable }
         return metrics
+    }
+
+    func applyRules(profile: WireGuardProfile, rules: DomainRules, geoIP: URL?) throws {
+        guard let metricsSocket = verifiedMetricsSocket else {
+            throw SessionError.ruleReloadFailed
+        }
+        let configuration = try Self.configuration(
+            profile: profile, rules: rules, port: port, geoIP: geoIP, home: home
+        )
+        let requestBody = try JSONEncoder().encode(["payload": String(decoding: configuration, as: UTF8.self)])
+        let input = Pipe()
+        let status = Pipe()
+        let client = Process()
+        client.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
+        // Leaving force off retains the existing proxy listener.
+        client.arguments = [
+            "--disable", "--silent", "--fail", "--connect-timeout", "1", "--max-time", "6",
+            "--noproxy", "*", "--unix-socket", metricsSocket.path,
+            "--request", "PUT", "--header", "Content-Type: application/json",
+            "--data-binary", "@-", "--output", "/dev/null", "--write-out", "%{http_code}",
+            "http://localhost/configs",
+        ]
+        client.environment = ["PATH": "/usr/bin:/bin", "HOME": home.path]
+        client.standardInput = input
+        client.standardOutput = status
+        client.standardError = FileHandle.nullDevice
+
+        let writer = input.fileHandleForWriting
+        // If curl exits early, a broken pipe must fail the request without terminating the app.
+        guard fcntl(writer.fileDescriptor, F_SETNOSIGPIPE, 1) != -1 else {
+            throw SessionError.ruleReloadFailed
+        }
+        do {
+            try client.run()
+        } catch {
+            throw SessionError.ruleReloadFailed
+        }
+        do {
+            try writer.write(contentsOf: requestBody)
+            try writer.close()
+        } catch {
+            try? writer.close()
+            if client.isRunning { client.terminate() }
+            client.waitUntilExit()
+            throw SessionError.ruleReloadFailed
+        }
+        let response = status.fileHandleForReading.readDataToEndOfFile()
+        client.waitUntilExit()
+        guard client.terminationStatus == 0, String(decoding: response, as: UTF8.self) == "204" else {
+            throw SessionError.ruleReloadFailed
+        }
+    }
+
+    private var verifiedMetricsSocket: URL? {
+        guard isRunning, let metricsSocket, FileManager.default.fileExists(atPath: metricsSocket.path) else { return nil }
+        if case .adopted(let process) = engine, !process.ownsMetricsSocket(metricsSocket) { return nil }
+        return metricsSocket
     }
 
     func checkExit() throws -> String {
@@ -203,6 +293,27 @@ final class MihomoSession: @unchecked Sendable {
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         return process
+    }
+
+    private static func configuration(
+        profile: WireGuardProfile, rules: DomainRules, port: Int, geoIP: URL?, home: URL
+    ) throws -> Data {
+        var database: URL?
+        if rules.useChinaIPRules {
+            let files = FileManager.default
+            let target = home.appendingPathComponent("Country.mmdb")
+            if !files.fileExists(atPath: target.path) {
+                guard let geoIP else { throw SessionError.geoIPUnavailable }
+                let staged = home.appendingPathComponent(".mmdb-\(UUID().uuidString)")
+                defer { try? files.removeItem(at: staged) }
+                try files.copyItem(at: geoIP, to: staged)
+                try files.moveItem(at: staged, to: target)
+            }
+            database = target
+        }
+        return try MihomoConfiguration.make(
+            profile: profile, rules: rules, port: port, chinaIPDatabasePath: database?.path
+        )
     }
 
     private static func makeMetricsSocketPath() -> URL? {

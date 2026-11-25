@@ -1,7 +1,9 @@
+import AppKit
 import SwiftUI
 
 @MainActor
 struct MenuView: View {
+    @Environment(\.openWindow) private var openWindow
     @ObservedObject var store: TunnelStore
     @StateObject private var editor = RuleEditorState()
 
@@ -163,15 +165,14 @@ struct MenuView: View {
         }
         .padding(3)
         .background(.quaternary.opacity(0.7), in: RoundedRectangle(cornerRadius: 8))
-        .disabled(!isDisconnected)
+        .disabled(isBusy)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("连接模式")
     }
 
     private func modeButton(_ title: String, symbol: String, mode: TunnelMode, selected: Bool) -> some View {
         Button {
-            store.mode = mode
-            store.refresh()
+            store.selectMode(mode)
         } label: {
             Label(title, systemImage: symbol)
                 .font(.callout.weight(selected ? .semibold : .regular))
@@ -189,6 +190,13 @@ struct MenuView: View {
 
     private var footer: some View {
         HStack(spacing: 12) {
+            Button {
+                NSApp.activate(ignoringOtherApps: true)
+                openWindow(id: "traffic-history")
+            } label: {
+                Label("流量统计", systemImage: "chart.bar.xaxis")
+            }
+
             Button(action: store.importProfile) {
                 Label("导入配置…", systemImage: "folder")
             }
@@ -305,7 +313,7 @@ struct MenuView: View {
         return false
     }
 
-    private var isBusy: Bool { !isConnected && !isDisconnected }
+    private var isBusy: Bool { store.changingMode || (!isConnected && !isDisconnected) }
 
     private var isRulesMode: Bool {
         if case .rules = store.mode { return true }
@@ -334,7 +342,8 @@ struct MenuView: View {
     }
 
     private var actionTitle: String {
-        switch store.status {
+        if store.changingMode { return "正在切换模式…" }
+        return switch store.status {
         case .connected: "断开连接"
         case .connecting: "正在连接…"
         case .disconnecting: "正在断开…"

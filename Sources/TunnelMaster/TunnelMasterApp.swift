@@ -21,6 +21,21 @@ struct TunnelMasterApp: App {
             .accessibilityLabel(menuBarTitle)
         }
         .menuBarExtraStyle(.window)
+
+        historyWindow
+    }
+
+    private var historyWindow: some Scene {
+        Window("流量历史", id: "traffic-history") {
+            UsageHistoryView(store: store)
+        }
+        .defaultSize(width: 960, height: 780)
+        .commands {
+            CommandGroup(replacing: .appTermination) {
+                Button("退出 TunnelMaster", action: store.quit)
+                    .keyboardShortcut("q")
+            }
+        }
     }
 
     private static func globeImage(opacity: CGFloat) -> NSImage {

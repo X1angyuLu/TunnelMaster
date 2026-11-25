@@ -24,6 +24,16 @@ public struct SystemProxyController: Sendable {
         return journal.serviceID == primary
     }
 
+    public func ownsActiveProxy(port: Int) -> Bool {
+        guard let journal = try? read(), journal.port == port, appliesToPrimaryService(),
+              let active = SCDynamicStoreCopyProxies(nil) as? [String: Any] else { return false }
+        return ["HTTP", "HTTPS", "SOCKS"].allSatisfy { protocolName in
+            active["\(protocolName)Enable"] as? Int == 1 &&
+                active["\(protocolName)Proxy"] as? String == "127.0.0.1" &&
+                active["\(protocolName)Port"] as? Int == port
+        }
+    }
+
     public func enable(port: Int) throws {
         guard (1024...65535).contains(port) else {
             throw ProxyError.invalidPort

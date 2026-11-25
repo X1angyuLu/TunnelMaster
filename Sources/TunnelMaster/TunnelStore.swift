@@ -34,7 +34,7 @@ struct TrafficSample: Identifiable {
 
 @MainActor
 final class TunnelStore: ObservableObject {
-    @Published var mode: TunnelMode {
+    @Published private(set) var mode: TunnelMode {
         didSet { UserDefaults.standard.set(mode.rawValue, forKey: "routingMode") }
     }
     @Published private(set) var status: ConnectionStatus = .disconnected
@@ -49,18 +49,27 @@ final class TunnelStore: ObservableObject {
     @Published private(set) var hasRuleEngine = MihomoSession.executable != nil
     @Published private(set) var needsProxyRecovery = false
     @Published private(set) var changedNetwork = false
+    @Published private(set) var changingMode = false
     @Published private(set) var connectedAt: Date?
     @Published private(set) var traffic: TrafficSnapshot?
     @Published private(set) var trafficHistory: [TrafficSample] = []
+    @Published private(set) var historyRevision = 0
+    @Published private(set) var historySaveIssue = false
 
     private let storage: URL
     private let systemProxy: SystemProxyController
+    private let historyStore: TrafficHistoryStore
     private var profile: WireGuardProfile?
     private var session: MihomoSession?
     private var monitor: Timer?
     private var metricsTask: Task<Void, Never>?
     private var metricsVisible = false
     private var lastReading: (metrics: MihomoMetrics, instant: ContinuousClock.Instant)?
+    private var historyRecorder: TrafficHistoryRecorder?
+    private var lastHistoryObservation: SuspendingClock.Instant?
+    private var historyPending: [Date: TrafficHistoryEntry] = [:]
+    private var historyWrite: Task<Void, Never>?
+    private var lastHistoryWrite: ContinuousClock.Instant?
 
     init() {
         let defaults = UserDefaults.standard
@@ -82,6 +91,7 @@ final class TunnelStore: ObservableObject {
 
         storage = Self.storageDirectory()
         systemProxy = SystemProxyController(stateURL: storage.appendingPathComponent("proxy-recovery.json"))
+        historyStore = TrafficHistoryStore(url: storage.appendingPathComponent("traffic-history.sqlite3"))
 
         do {
             try Self.prepareStorage(storage)
@@ -98,6 +108,7 @@ final class TunnelStore: ObservableObject {
         monitor = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
+        acceptHandoff()
     }
 
     func importProfile() {
@@ -158,6 +169,7 @@ final class TunnelStore: ObservableObject {
             exitIP = nil
             errorMessage = "Mihomo 已停止。请恢复之前的系统代理设置。"
             Task.detached { session.stop() }
+            Task { await flushHistory() }
         }
         let sessionRunning = session?.isRunning == true
         needsProxyRecovery = !sessionRunning && systemProxy.hasSavedState()
@@ -169,6 +181,7 @@ final class TunnelStore: ObservableObject {
     }
 
     func toggle() {
+        guard !changingMode else { return }
         switch status {
         case .connected: disconnect()
         case .disconnected:
@@ -196,11 +209,57 @@ final class TunnelStore: ObservableObject {
     }
 
     func quit() {
-        guard status != .connecting, status != .disconnecting else { return }
+        guard status != .connecting, status != .disconnecting, !changingMode else { return }
         if session != nil || systemProxy.hasSavedState() {
             disconnect(quitAfterward: true)
         } else {
-            NSApplication.shared.terminate(nil)
+            Task {
+                await flushHistory()
+                NSApplication.shared.terminate(nil)
+            }
+        }
+    }
+
+    func trafficEntries(from: Date, until: Date) async throws -> [TrafficHistoryEntry] {
+        try await historyStore.entries(from: from, until: until)
+    }
+
+    func selectMode(_ next: TunnelMode) {
+        guard next != mode, !changingMode else { return }
+        if status == .disconnected {
+            mode = next
+            refresh()
+            return
+        }
+        guard status == .connected, let session, let profile else { return }
+        let rules: DomainRules
+        do {
+            rules = try routingRules(for: next)
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
+        changingMode = true
+        errorMessage = nil
+        Task {
+            defer { changingMode = false }
+            do {
+                let geoIP = rules.useChinaIPRules ? try await Self.ensureGeoIP(at: storage) : nil
+                guard self.session === session, session.isRunning else { return }
+                try await Task.detached { try session.applyRules(profile: profile, rules: rules, geoIP: geoIP) }.value
+                guard self.session === session, session.isRunning else { return }
+                mode = next
+            } catch {
+                errorMessage = error.localizedDescription
+                refresh()
+            }
+        }
+    }
+
+    private func routingRules(for mode: TunnelMode) throws -> DomainRules {
+        switch mode {
+        case .rules: try DomainRules.parse(direct: directDomains, proxy: proxyDomains, china: useChinaIPRules)
+        case .global: DomainRules(direct: [], proxy: [], useChinaIPRules: false)
         }
     }
 
@@ -208,14 +267,23 @@ final class TunnelStore: ObservableObject {
         metricsVisible = visible
     }
 
-    private func activateSession(_ session: MihomoSession) {
+    private func activateSession(_ session: MihomoSession, continuingSince: Date? = nil, baseline: MihomoMetrics? = nil) {
         self.session = session
-        connectedAt = Date()
+        let start = Date()
+        connectedAt = continuingSince ?? start
         status = .connected
+        historyRecorder = TrafficHistoryRecorder(downloaded: baseline?.downloadTotal ?? 0, uploaded: baseline?.uploadTotal ?? 0)
+        lastHistoryObservation = .now
+        if continuingSince == nil {
+            queueHistory([TrafficHistoryEntry(
+                timestamp: TrafficHistoryRecorder.bucketStart(for: start), downloaded: 0, uploaded: 0,
+                connectedSeconds: 0, peakDownloadRate: 0, peakUploadRate: 0, sessionsStarted: 1
+            )])
+        }
         metricsTask = Task { [weak self] in
             while !Task.isCancelled {
                 let reading = await Task.detached(priority: .utility) { try? session.readMetrics() }.value
-                guard !Task.isCancelled, self?.session === session else { return }
+                guard !Task.isCancelled, self?.session === session, session.isRunning else { return }
                 self?.updateMetrics(reading)
                 do {
                     try await Task.sleep(for: .seconds(self?.metricsVisible == true ? 2 : 5))
@@ -233,6 +301,7 @@ final class TunnelStore: ObservableObject {
             lastReading = nil
             traffic = nil
             trafficHistory = history
+            recordHistory(at: now, reading: nil, downloadRate: nil, uploadRate: nil)
             return
         }
 
@@ -258,15 +327,122 @@ final class TunnelStore: ObservableObject {
             downloadRate: downloadRate, uploadRate: uploadRate,
             downloadTotal: reading.downloadTotal, uploadTotal: reading.uploadTotal, connectionCount: reading.connectionCount
         )
+        recordHistory(at: now, reading: reading, downloadRate: downloadRate, uploadRate: uploadRate)
     }
 
     private func clearMetrics() {
         metricsTask?.cancel()
         metricsTask = nil
         lastReading = nil
+        lastHistoryObservation = nil
+        historyRecorder = nil
         connectedAt = nil
         traffic = nil
         trafficHistory = []
+    }
+
+    private func recordHistory(at date: Date, reading: MihomoMetrics?, downloadRate: Double?, uploadRate: Double?) {
+        guard var recorder = historyRecorder, let previous = lastHistoryObservation else { return }
+        let instant = SuspendingClock.now
+        let elapsed = previous.duration(to: instant).components
+        let seconds = Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18
+        lastHistoryObservation = instant
+        queueHistory(recorder.record(
+            at: date, connectedSeconds: min(seconds, 12),
+            totals: reading.map { ($0.downloadTotal, $0.uploadTotal) },
+            downloadRate: downloadRate, uploadRate: uploadRate, connections: reading?.connectionCount ?? 0
+        ))
+        historyRecorder = recorder
+    }
+
+    private func queueHistory(_ entries: [TrafficHistoryEntry]) {
+        mergePendingHistory(entries)
+        if lastHistoryWrite.map({ $0.duration(to: .now) >= .seconds(15) }) ?? true {
+            startHistoryWrite()
+        }
+    }
+
+    private func mergePendingHistory(_ entries: [TrafficHistoryEntry]) {
+        for entry in entries {
+            let timestamp = entry.timestamp
+            guard let existing = historyPending[timestamp] else {
+                historyPending[timestamp] = entry
+                continue
+            }
+            historyPending[timestamp] = TrafficHistoryEntry(
+                timestamp: timestamp, downloaded: existing.downloaded + entry.downloaded,
+                uploaded: existing.uploaded + entry.uploaded,
+                connectedSeconds: existing.connectedSeconds + entry.connectedSeconds,
+                peakDownloadRate: max(existing.peakDownloadRate, entry.peakDownloadRate),
+                peakUploadRate: max(existing.peakUploadRate, entry.peakUploadRate),
+                sessionsStarted: existing.sessionsStarted + entry.sessionsStarted,
+                peakConnections: max(existing.peakConnections, entry.peakConnections), samples: existing.samples + entry.samples
+            )
+        }
+    }
+
+    private func startHistoryWrite() {
+        guard historyWrite == nil, !historyPending.isEmpty else { return }
+        let entries = Array(historyPending.values)
+        historyPending.removeAll(keepingCapacity: true)
+        lastHistoryWrite = .now
+        historyWrite = Task { [weak self, historyStore] in
+            defer { self?.historyWrite = nil }
+            do {
+                try await historyStore.append(entries)
+                self?.historySaveIssue = false
+                self?.historyRevision += 1
+            } catch {
+                self?.mergePendingHistory(entries)
+                self?.historySaveIssue = true
+            }
+        }
+    }
+
+    private func flushHistory() async {
+        await historyWrite?.value
+        startHistoryWrite()
+        await historyWrite?.value
+    }
+
+    private func acceptHandoff() {
+        let arguments = CommandLine.arguments
+        guard let index = arguments.firstIndex(of: "--handoff"), arguments.indices.contains(index + 1) else { return }
+        let file = URL(fileURLWithPath: arguments[index + 1]).standardizedFileURL
+        let receipt = file.appendingPathExtension("ready")
+        let storageFolder = storage.resolvingSymlinksInPath()
+        let systemProxy = self.systemProxy
+        status = .connecting
+        Task {
+            do {
+                let (session, metrics, handoff) = try await Task.detached {
+                    guard file.deletingLastPathComponent().resolvingSymlinksInPath() == storageFolder,
+                          file.lastPathComponent.hasPrefix("handoff-"), file.pathExtension == "json",
+                          let attributes = try? FileManager.default.attributesOfItem(atPath: file.path),
+                          attributes[.type] as? FileAttributeType == .typeRegular,
+                          attributes[.ownerAccountID] as? UInt32 == getuid(),
+                          attributes[.posixPermissions] as? Int == 0o600 else { throw HandoffError.invalid }
+                    let handoff = try JSONDecoder().decode(SessionHandoff.self, from: Data(contentsOf: file))
+                    guard abs(handoff.createdAt - Date().timeIntervalSince1970) <= 300,
+                          systemProxy.ownsActiveProxy(port: handoff.port) else { throw HandoffError.invalid }
+                    let session = try MihomoSession.adopt(
+                        pid: handoff.processID,
+                        workingDirectory: URL(fileURLWithPath: handoff.workingDirectory, isDirectory: true),
+                        port: handoff.port,
+                        metricsSocket: URL(fileURLWithPath: handoff.metricsSocket)
+                    )
+                    return (session, try session.readMetrics(), handoff)
+                }.value
+                let acknowledgement = "\(ProcessInfo.processInfo.processIdentifier) \(session.processID)\n"
+                try Self.privateWrite(Data(acknowledgement.utf8), to: receipt)
+                activateSession(session, continuingSince: Date(timeIntervalSince1970: min(handoff.connectedAt, Date().timeIntervalSince1970)), baseline: metrics)
+                checkExit()
+            } catch {
+                status = .disconnected
+                errorMessage = "无法接管当前连接。"
+                refresh()
+            }
+        }
     }
 
     private func connect() {
@@ -276,9 +452,7 @@ final class TunnelStore: ObservableObject {
         }
         let rules: DomainRules
         do {
-            rules = mode == .rules
-                ? try DomainRules.parse(direct: directDomains, proxy: proxyDomains, china: useChinaIPRules)
-                : DomainRules(direct: [], proxy: [], useChinaIPRules: false)
+            rules = try routingRules(for: mode)
         } catch {
             errorMessage = error.localizedDescription
             return
@@ -332,11 +506,15 @@ final class TunnelStore: ObservableObject {
         Task {
             do {
                 try await Task.detached { try systemProxy.disable() }.value
-                session = nil
-                clearMetrics()
+                metricsTask?.cancel()
                 if let runningSession {
+                    let reading = await Task.detached(priority: .utility) { try? runningSession.readMetrics() }.value
+                    updateMetrics(reading)
                     await Task.detached { runningSession.stop() }.value
                 }
+                session = nil
+                clearMetrics()
+                await flushHistory()
                 status = .disconnected
                 exitIP = nil
                 errorMessage = nil
@@ -407,4 +585,17 @@ final class TunnelStore: ObservableObject {
             throw SessionError.geoIPUnavailable
         }
     }
+}
+
+private struct SessionHandoff: Decodable, Sendable {
+    let processID: Int32
+    let port: Int
+    let workingDirectory: String
+    let metricsSocket: String
+    let createdAt: TimeInterval
+    let connectedAt: TimeInterval
+}
+
+private enum HandoffError: Error {
+    case invalid
 }

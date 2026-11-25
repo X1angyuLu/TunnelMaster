@@ -26,7 +26,12 @@ struct DigitalOceanUsageView: View {
 
     var body: some View {
         let monthlyRequest = DigitalOceanMonthlyTransferRequest(
-            dropletID: state.isEditing ? nil : source.dropletID, refresh: state.refresh
+            dropletID: state.isEditing ? nil : source.dropletID, monitoringRevision: source.monitoringRevision,
+            refresh: state.refresh
+        )
+        let usageRequest = UsageRequest(
+            dropletID: source.dropletID, monitoringRevision: source.monitoringRevision,
+            range: range, refresh: state.refresh
         )
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
@@ -51,12 +56,12 @@ struct DigitalOceanUsageView: View {
             .frame(maxWidth: 1180)
             .frame(maxWidth: .infinity)
         }
-        .task(id: UsageRequest(dropletID: source.dropletID, range: range, refresh: state.refresh)) {
-            guard source.dropletID != nil else { return }
-            if state.refresh == state.completedRefresh, report != nil,
+        .task(id: usageRequest) {
+            guard usageRequest.dropletID != nil else { return }
+            if usageRequest.refresh == state.completedRefresh, report != nil,
                let lastUpdated = source.lastUpdated, lastUpdated.timeIntervalSinceNow > -60 { return }
-            state.completedRefresh = state.refresh
-            await source.load(days: range.rawValue)
+            state.completedRefresh = usageRequest.refresh
+            await source.load(days: usageRequest.range.rawValue)
         }
         .task(id: monthlyRequest) {
             guard monthlyRequest.dropletID != nil else { return }
@@ -69,11 +74,20 @@ struct DigitalOceanUsageView: View {
     private func toolbar(id: String) -> some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Label("Droplet \(id)", systemImage: "server.rack")
-                    .font(.title3.weight(.semibold))
+                DigitalOceanDropletMenu(source: source, compact: false)
                 Text("汇总共用这台服务器的设备，以及服务器上的其他公网流量。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if let error = source.dropletsError {
+                    Label("服务器列表读取失败，已保留当前监控设置。", systemImage: "exclamationmark.circle")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .help(error)
+                } else if source.isLoadingDroplets && source.droplets.isEmpty {
+                    ProgressView("正在读取服务器列表…")
+                        .font(.caption)
+                        .controlSize(.small)
+                }
             }
             Spacer(minLength: 8)
             Picker("监控时段", selection: $range) {
@@ -207,6 +221,9 @@ struct DigitalOceanUsageView: View {
                 .accessibilityAddTraits(.isHeader)
             Text("填入这台服务器的 Droplet ID 和具有 monitoring:read 权限的 Token。")
                 .font(.callout)
+                .foregroundStyle(.secondary)
+            Text("要在同一账户内切换监控服务器，Token 还需要 Droplet 读取权限。")
+                .font(.caption)
                 .foregroundStyle(.secondary)
 
             VStack(alignment: .leading, spacing: 10) {
@@ -349,6 +366,7 @@ struct DigitalOceanUsageView: View {
 
     private struct UsageRequest: Equatable {
         let dropletID: String?
+        let monitoringRevision: Int
         let range: DigitalOceanUsageRange
         let refresh: Int
     }
@@ -356,7 +374,70 @@ struct DigitalOceanUsageView: View {
 
 struct DigitalOceanMonthlyTransferRequest: Equatable {
     let dropletID: String?
+    let monitoringRevision: Int
     let refresh: Int
+}
+
+@MainActor
+private struct DigitalOceanDropletMenu: View {
+    @ObservedObject var source: DigitalOceanSource
+    let compact: Bool
+
+    private var currentName: String {
+        if let current = source.selectedDroplet { return title(current) }
+        return source.dropletID.map { "Droplet \($0)" } ?? "选择服务器"
+    }
+
+    var body: some View {
+        Menu {
+            if source.isLoadingDroplets {
+                Text("正在读取服务器列表…")
+            } else if let error = source.dropletsError {
+                Text(error)
+            } else if source.droplets.isEmpty {
+                Text("账户内没有可选服务器")
+            }
+            ForEach(source.droplets, id: \.id) { droplet in
+                let name = "\(title(droplet)) · #\(droplet.id)"
+                Button {
+                    source.selectDroplet(droplet.id)
+                } label: {
+                    if droplet.id == source.dropletID {
+                        Label(name, systemImage: "checkmark")
+                    } else {
+                        Text(name)
+                    }
+                }
+            }
+            Divider()
+            Button {
+                Task { await source.loadDroplets(force: true) }
+            } label: {
+                Label("刷新服务器列表", systemImage: "arrow.clockwise")
+            }
+            .disabled(source.isLoadingDroplets)
+        } label: {
+            Label {
+                Text(currentName)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            } icon: {
+                Image(systemName: source.dropletsError == nil ? "server.rack" : "exclamationmark.circle")
+            }
+            .font(compact ? .caption : .title3.weight(.semibold))
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize(horizontal: false, vertical: true)
+        .help(source.dropletsError ?? "当前监控服务器 · \(currentName)")
+        .accessibilityLabel("选择监控服务器")
+        .accessibilityValue(currentName)
+        .task(id: source.monitoringRevision) { await source.loadDroplets() }
+    }
+
+    private func title(_ droplet: DigitalOceanDropletSummary) -> String {
+        let name = droplet.name.isEmpty ? "Droplet \(droplet.id)" : droplet.name
+        return droplet.region.isEmpty ? name : "\(name) · \(droplet.region)"
+    }
 }
 
 @MainActor
@@ -369,13 +450,19 @@ struct DigitalOceanMonthlyTransferCard: View {
             HStack(spacing: 8) {
                 Text("本月出站流量")
                     .font(compact ? .caption.weight(.semibold) : .headline)
-                Text("单台 Droplet 估算")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .fixedSize()
+                if !compact {
+                    Text("单台 Droplet 估算")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
                 Spacer(minLength: 0)
                 if source.isLoadingMonthlyTransfer {
                     ProgressView().controlSize(.small)
                         .accessibilityLabel("正在更新本月出站流量")
+                }
+                if compact {
+                    DigitalOceanDropletMenu(source: source, compact: true)
                 }
             }
             if let transfer = source.monthlyTransfer {

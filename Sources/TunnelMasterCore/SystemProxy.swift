@@ -24,6 +24,17 @@ public struct SystemProxyController: Sendable {
         return journal.serviceID == primary
     }
 
+    public func hasActiveProxy() -> Bool {
+        guard let active = SCDynamicStoreCopyProxies(nil) as? [String: Any] else { return false }
+        return Self.hasEnabledProxy(in: active)
+    }
+
+    static func hasEnabledProxy(in configuration: [String: Any]) -> Bool {
+        ["HTTPEnable", "HTTPSEnable", "SOCKSEnable", "ProxyAutoConfigEnable", "ProxyAutoDiscoveryEnable"].contains {
+            (configuration[$0] as? NSNumber)?.boolValue == true
+        }
+    }
+
     public func ownsActiveProxy(port: Int) -> Bool {
         guard let journal = try? read(), journal.port == port, appliesToPrimaryService(),
               let active = SCDynamicStoreCopyProxies(nil) as? [String: Any] else { return false }
@@ -49,6 +60,9 @@ public struct SystemProxyController: Sendable {
             }
 
             let previous = Self.configuration(proxy)
+            if SCNetworkProtocolGetEnabled(proxy), Self.hasEnabledProxy(in: previous) {
+                throw ProxyError.activeProxy
+            }
             let journal = try ProxyJournal(
                 serviceID: serviceID,
                 port: port,
@@ -298,7 +312,7 @@ private enum ProxyValue: Codable, Equatable {
 
 private enum ProxyError: LocalizedError {
     case invalidPort, invalidState, cannotSaveState, pendingRecovery, noUsableService
-    case authorization, authenticatedProxy, systemConfiguration, proxyChanged
+    case authorization, authenticatedProxy, systemConfiguration, proxyChanged, activeProxy
 
     var errorDescription: String? {
         switch self {
@@ -311,6 +325,7 @@ private enum ProxyError: LocalizedError {
         case .authenticatedProxy: return "当前网络已设置带认证的代理，暂无法自动接管。"
         case .systemConfiguration: return "macOS 无法更新系统代理。请确认已授权并重试。"
         case .proxyChanged: return "其他工具修改了当前代理。请先在系统设置中检查代理，再重试恢复。"
+        case .activeProxy: return "当前已有其他系统代理正在使用。"
         }
     }
 }

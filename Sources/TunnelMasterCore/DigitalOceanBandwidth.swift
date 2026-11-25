@@ -77,6 +77,13 @@ public struct DigitalOceanMonthlyTransfer: Sendable {
     public let projectedAllowanceGiB: Double?
 }
 
+public struct DigitalOceanDropletSummary: Sendable, Equatable, Identifiable {
+    public let id: String
+    public let name: String
+    public let region: String
+    public let status: String?
+}
+
 public enum DigitalOceanBandwidthError: LocalizedError, Equatable, Sendable {
     case invalidDropletID
     case invalidToken
@@ -122,6 +129,39 @@ public struct DigitalOceanBandwidthClient: Sendable {
 
     init(transport: @escaping @Sendable (URLRequest) async throws -> (Data, URLResponse)) {
         self.transport = transport
+    }
+
+    public func droplets(token: String) async throws -> [DigitalOceanDropletSummary] {
+        let authorization = try Self.authorizationToken(token)
+        let pageSize = 200
+        var result: [DigitalOceanDropletSummary] = []
+        var seen: Set<UInt64> = []
+        for page in 1...1000 {
+            try Task.checkCancellation()
+            let data = try await request(path: "/v2/droplets", queryItems: [
+                URLQueryItem(name: "per_page", value: String(pageSize)),
+                URLQueryItem(name: "page", value: String(page))
+            ], token: authorization)
+            try Task.checkCancellation()
+            guard let response = try? JSONDecoder().decode(DropletListResponse.self, from: data),
+                  response.droplets.count <= pageSize,
+                  response.droplets.allSatisfy({ $0.id > 0 && !$0.region.slug.isEmpty }) else {
+                throw DigitalOceanBandwidthError.invalidResponse
+            }
+            let countBeforePage = result.count
+            for droplet in response.droplets where seen.insert(droplet.id).inserted {
+                result.append(DigitalOceanDropletSummary(
+                    id: String(droplet.id), name: droplet.name, region: droplet.region.slug, status: droplet.status
+                ))
+            }
+            // Treat pagination links as a signal only. The bearer token is sent to the fixed API host.
+            let hasMore = response.hasMore(after: page, pageSize: pageSize)
+            guard result.count > countBeforePage || (response.droplets.isEmpty && !hasMore) else {
+                throw DigitalOceanBandwidthError.invalidResponse
+            }
+            if !hasMore { return result }
+        }
+        throw DigitalOceanBandwidthError.invalidResponse
     }
 
     public func report(dropletID: String, token: String, from: Date, until: Date) async throws -> DigitalOceanBandwidthReport {
@@ -198,11 +238,15 @@ public struct DigitalOceanBandwidthClient: Sendable {
               let identifier = UInt64(enteredID), identifier > 0 else {
             throw DigitalOceanBandwidthError.invalidDropletID
         }
+        return (String(identifier), try authorizationToken(token))
+    }
+
+    private static func authorizationToken(_ token: String) throws -> String {
         let authorization = token.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !authorization.isEmpty, authorization.utf8.allSatisfy({ (33...126).contains($0) }) else {
             throw DigitalOceanBandwidthError.invalidToken
         }
-        return (String(identifier), authorization)
+        return authorization
     }
 
     private func request(path: String, queryItems: [URLQueryItem]? = nil, token: String) async throws -> Data {
@@ -321,6 +365,35 @@ private struct DropletResponse: Decodable {
     }
 
     let droplet: Droplet
+}
+
+private struct DropletListResponse: Decodable {
+    struct Item: Decodable {
+        struct Region: Decodable { let slug: String }
+
+        let id: UInt64
+        let name: String
+        let region: Region
+        let status: String?
+    }
+
+    struct Links: Decodable {
+        struct Pages: Decodable { let next: String? }
+
+        let pages: Pages?
+    }
+
+    struct Metadata: Decodable { let total: Int }
+
+    let droplets: [Item]
+    let links: Links?
+    let meta: Metadata?
+
+    func hasMore(after page: Int, pageSize: Int) -> Bool {
+        if let pages = links?.pages { return pages.next?.isEmpty == false }
+        if let meta { return meta.total > page * pageSize }
+        return droplets.count == pageSize
+    }
 }
 
 private struct DropletMetadata {

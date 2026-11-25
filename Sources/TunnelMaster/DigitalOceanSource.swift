@@ -33,6 +33,15 @@ final class DigitalOceanSource: ObservableObject {
     @Published private(set) var monthlyTransfer: DigitalOceanMonthlyTransfer?
     @Published private(set) var isLoadingMonthlyTransfer = false
     @Published private(set) var monthlyTransferError: String?
+    @Published private(set) var droplets: [DigitalOceanDropletSummary] = []
+    @Published private(set) var isLoadingDroplets = false
+    @Published private(set) var dropletsError: String?
+    @Published private(set) var monitoringRevision = 0
+
+    var selectedDroplet: DigitalOceanDropletSummary? {
+        guard let dropletID, let numericID = UInt64(dropletID) else { return nil }
+        return droplets.first { $0.id == String(numericID) }
+    }
 
     private let defaults = UserDefaults.standard
     private let client = DigitalOceanBandwidthClient()
@@ -41,18 +50,24 @@ final class DigitalOceanSource: ObservableObject {
     private let localCredentialFile: MonitoringLocalFile
     private var requestID: UUID?
     private var reportDays: Int?
+    private var credentialDropletID: String?
     private var snapshots: [Int: Snapshot] = [:]
     private var pending: [Int: Task<Snapshot, Error>] = [:]
     private var credentialRevision = UUID()
     private var pendingMonthlyTransfer: Task<DigitalOceanMonthlyTransfer, Error>?
     private var monthlyTransferFetchedAt: Date?
+    private var dropletDirectoryRevision = UUID()
+    private var pendingDroplets: Task<[DigitalOceanDropletSummary], Error>?
+    private var dropletsFetchedAt: Date?
 
     init(storage: URL) {
         localCredentialFile = MonitoringLocalFile(directory: storage)
         let configuration = defaults.dictionary(forKey: preference)
         credentialStorage = (configuration?["storage"] as? String)
             .flatMap(DigitalOceanCredentialStorage.init(rawValue:)) ?? .keychain
-        dropletID = configuration?["dropletID"] as? String ?? defaults.string(forKey: legacyPreference)
+        let originalID = configuration?["dropletID"] as? String ?? defaults.string(forKey: legacyPreference)
+        credentialDropletID = originalID
+        dropletID = configuration?["selectedDropletID"] as? String ?? originalID
     }
 
     func credentials(dropletID: String, token: String, storage: DigitalOceanCredentialStorage) async throws {
@@ -62,7 +77,7 @@ final class DigitalOceanSource: ObservableObject {
         )
         let request = beginRequest()
         defer { finishRequest(request) }
-        let initial = try await fetch(credential, days: 1)
+        let initial = try await fetch(dropletID: credential.dropletID, token: credential.token, days: 1)
         try Task.checkCancellation()
         guard requestID == request else { throw CancellationError() }
         switch storage {
@@ -72,8 +87,10 @@ final class DigitalOceanSource: ObservableObject {
         case .localFile:
             try localCredentialFile.store(credential)
         }
-        clearSnapshots()
-        saveConfiguration(dropletID: credential.dropletID, storage: storage)
+        clearDropletDirectory()
+        clearReports()
+        credentialDropletID = credential.dropletID
+        saveConfiguration(dropletID: credential.dropletID, originalID: credential.dropletID, storage: storage)
         let snapshot = Snapshot(report: initial, fetchedAt: .now)
         snapshots[1] = snapshot
         updateReport(snapshot, days: 1)
@@ -81,11 +98,48 @@ final class DigitalOceanSource: ObservableObject {
 
     func saveCredentialLocally() throws {
         guard credentialStorage == .keychain, let dropletID else { return }
-        let credential = try MonitoringKeychain.load()
-        guard credential.dropletID == dropletID else { throw DigitalOceanBandwidthError.invalidDropletID }
+        let credential = try storedCredential()
         try localCredentialFile.store(credential)
-        saveConfiguration(dropletID: dropletID, storage: .localFile)
+        saveConfiguration(dropletID: dropletID, originalID: credential.dropletID, storage: .localFile)
         errorMessage = nil
+    }
+
+    func loadDroplets(force: Bool = false) async {
+        guard dropletID != nil, pendingDroplets == nil, !Task.isCancelled else { return }
+        if !force, let fetchedAt = dropletsFetchedAt, abs(fetchedAt.timeIntervalSinceNow) < 300 { return }
+
+        let revision = dropletDirectoryRevision
+        isLoadingDroplets = true
+        dropletsError = nil
+        defer {
+            if dropletDirectoryRevision == revision {
+                pendingDroplets = nil
+                isLoadingDroplets = false
+            }
+        }
+        do {
+            let token = try storedCredential().token
+            let request = Task { [client] in try await client.droplets(token: token) }
+            pendingDroplets = request
+            let result = try await request.value
+            guard dropletDirectoryRevision == revision else { return }
+            droplets = result
+            dropletsFetchedAt = .now
+        } catch is CancellationError {
+            return
+        } catch {
+            guard dropletDirectoryRevision == revision else { return }
+            dropletsError = (error as? DigitalOceanBandwidthError) == .unauthorized
+                ? "无法读取 Droplet 列表。请检查令牌是否有效并具有 droplet:read 权限。"
+                : error.localizedDescription
+        }
+    }
+
+    func selectDroplet(_ id: String) {
+        guard let originalID = credentialDropletID, id != selectedDroplet?.id,
+              droplets.contains(where: { $0.id == id }) else { return }
+        clearReports()
+        saveConfiguration(dropletID: id, originalID: originalID, storage: credentialStorage)
     }
 
     func load(days: Int) async {
@@ -114,14 +168,10 @@ final class DigitalOceanSource: ObservableObject {
         case .keychain: try MonitoringKeychain.remove()
         case .localFile: try localCredentialFile.remove()
         }
-        clearSnapshots()
-        requestID = nil
-        isLoading = false
-        errorMessage = nil
+        clearDropletDirectory()
+        clearReports()
+        credentialDropletID = nil
         dropletID = nil
-        report = nil
-        lastUpdated = nil
-        reportDays = nil
         defaults.removeObject(forKey: legacyPreference)
         defaults.removeObject(forKey: preference)
         credentialStorage = .keychain
@@ -141,8 +191,8 @@ final class DigitalOceanSource: ObservableObject {
             return snapshot
         }
 
-        let credential = try storedCredential(dropletID: dropletID)
-        let request = Task { Snapshot(report: try await fetch(credential, days: days), fetchedAt: .now) }
+        let token = try storedCredential().token
+        let request = Task { Snapshot(report: try await fetch(dropletID: dropletID, token: token, days: days), fetchedAt: .now) }
         pending[days] = request
         defer {
             if credentialRevision == revision { pending[days] = nil }
@@ -174,9 +224,9 @@ final class DigitalOceanSource: ObservableObject {
             }
         }
         do {
-            let credential = try storedCredential(dropletID: dropletID)
+            let token = try storedCredential().token
             let request = Task { [client] in
-                try await client.monthlyTransfer(dropletID: credential.dropletID, token: credential.token, now: now)
+                try await client.monthlyTransfer(dropletID: dropletID, token: token, now: now)
             }
             pendingMonthlyTransfer = request
             let result = try await request.value
@@ -191,16 +241,16 @@ final class DigitalOceanSource: ObservableObject {
         }
     }
 
-    private func storedCredential(dropletID: String) throws -> MonitoringCredential {
+    private func storedCredential() throws -> MonitoringCredential {
         let credential = switch credentialStorage {
         case .keychain: try MonitoringKeychain.load()
         case .localFile: try localCredentialFile.load()
         }
-        guard credential.dropletID == dropletID else { throw DigitalOceanBandwidthError.invalidDropletID }
+        guard credential.dropletID == credentialDropletID else { throw DigitalOceanBandwidthError.invalidDropletID }
         return credential
     }
 
-    private func clearSnapshots() {
+    private func clearReports() {
         credentialRevision = UUID()
         pending.values.forEach { $0.cancel() }
         pending.removeAll()
@@ -211,10 +261,29 @@ final class DigitalOceanSource: ObservableObject {
         monthlyTransfer = nil
         monthlyTransferError = nil
         isLoadingMonthlyTransfer = false
+        requestID = nil
+        isLoading = false
+        errorMessage = nil
+        report = nil
+        lastUpdated = nil
+        reportDays = nil
+        monitoringRevision += 1
     }
 
-    private func saveConfiguration(dropletID: String, storage: DigitalOceanCredentialStorage) {
-        defaults.set(["dropletID": dropletID, "storage": storage.rawValue], forKey: preference)
+    private func clearDropletDirectory() {
+        dropletDirectoryRevision = UUID()
+        pendingDroplets?.cancel()
+        pendingDroplets = nil
+        dropletsFetchedAt = nil
+        droplets = []
+        dropletsError = nil
+        isLoadingDroplets = false
+    }
+
+    private func saveConfiguration(dropletID: String, originalID: String, storage: DigitalOceanCredentialStorage) {
+        var configuration = ["dropletID": originalID, "storage": storage.rawValue]
+        if dropletID != originalID { configuration["selectedDropletID"] = dropletID }
+        defaults.set(configuration, forKey: preference)
         self.dropletID = dropletID
         credentialStorage = storage
     }
@@ -233,10 +302,10 @@ final class DigitalOceanSource: ObservableObject {
         isLoading = false
     }
 
-    private func fetch(_ credential: MonitoringCredential, days: Int) async throws -> DigitalOceanBandwidthReport {
+    private func fetch(dropletID: String, token: String, days: Int) async throws -> DigitalOceanBandwidthReport {
         let now = Date()
         return try await client.report(
-            dropletID: credential.dropletID, token: credential.token,
+            dropletID: dropletID, token: token,
             from: now.addingTimeInterval(-Double(days) * 86_400), until: now
         )
     }

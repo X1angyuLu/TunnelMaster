@@ -9,14 +9,18 @@ final class MenuTrafficLoader: ObservableObject {
 
     private enum Selection: Equatable {
         case local(MenuTrafficRange)
-        case server(MenuTrafficRange, String)
+        case server(MenuTrafficRange, String, Int)
     }
 
     private var selection: Selection?
     private var request: UUID?
 
-    func report(for range: MenuTrafficRange, serverID: String?) -> MenuTrafficReport? {
-        let expected = serverID.map { Selection.server(range, $0) } ?? .local(range)
+    func report(for range: MenuTrafficRange, serverID: String?, monitoringRevision: Int?) -> MenuTrafficReport? {
+        let expected = if let serverID, let monitoringRevision {
+            Selection.server(range, serverID, monitoringRevision)
+        } else {
+            Selection.local(range)
+        }
         return selection == expected ? report : nil
     }
 
@@ -32,7 +36,9 @@ final class MenuTrafficLoader: ObservableObject {
 
     func loadServer(source: DigitalOceanSource, range: MenuTrafficRange, force: Bool = false) async {
         guard let dropletID = source.dropletID else { return }
-        await load(.server(range, dropletID)) {
+        let monitoringRevision = source.monitoringRevision
+        await load(.server(range, dropletID, monitoringRevision)) {
+            guard source.monitoringRevision == monitoringRevision else { throw CancellationError() }
             let snapshot = try await source.bandwidth(days: range.days, maxAge: force ? 0 : 120)
             return .digitalOcean(range: range, report: snapshot.report, updatedAt: snapshot.fetchedAt)
         }

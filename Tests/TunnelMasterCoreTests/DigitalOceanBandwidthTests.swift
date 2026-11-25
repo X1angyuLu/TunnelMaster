@@ -3,6 +3,61 @@ import Testing
 @testable import TunnelMasterCore
 
 struct DigitalOceanBandwidthTests {
+    @Test func listsDropletPagesWithoutFollowingProviderLinks() async throws {
+        let client = dropletClient { page in
+            switch page {
+            case 1:
+                return (200, """
+                {"droplets":[{"id":42,"name":"Alpha","region":{"slug":"sfo3"},"status":"active"}],
+                 "links":{"pages":{"next":"https://untrusted.invalid/other?per_page=50&page=87"}}}
+                """)
+            case 2:
+                return (200, """
+                {"droplets":[{"id":42,"name":"Alpha","region":{"slug":"sfo3"}},
+                             {"id":43,"name":"Beta","region":{"slug":"nyc3"}}],
+                 "links":{"pages":{"prev":"https://api.digitalocean.com/v2/droplets?page=1"}}}
+                """)
+            default:
+                Issue.record("Unexpected Droplet page request")
+                return (400, "{}")
+            }
+        }
+        let droplets = try await client.droplets(token: " fixture-token ")
+        #expect(droplets.map(\.id) == ["42", "43"])
+        #expect(droplets.map(\.name) == ["Alpha", "Beta"])
+        #expect(droplets.map(\.region) == ["sfo3", "nyc3"])
+        #expect(droplets.map(\.status) == ["active", nil])
+    }
+
+    @Test func usesDropletMetadataWhenPageLinksAreAbsent() async throws {
+        let client = dropletClient { page in
+            let ids = page == 1 ? 1...200 : 201...201
+            let elements = ids.map { """
+            {"id":\($0),"name":"Fixture","region":{"slug":"sfo3"}}
+            """ }
+            return (200, """
+            {"droplets":[\(elements.joined(separator: ","))],"meta":{"total":201}}
+            """)
+        }
+        let droplets = try await client.droplets(token: "fixture-token")
+        #expect(droplets.count == 201)
+        #expect(droplets.last?.id == "201")
+    }
+
+    @Test func rejectsRepeatedDropletPagesAndPropagatesUnauthorized() async {
+        let repeating = dropletClient { _ in (200, """
+        {"droplets":[{"id":42,"name":"Alpha","region":{"slug":"sfo3"}}],
+         "links":{"pages":{"next":"https://api.digitalocean.com/v2/droplets?page=2"}}}
+        """) }
+        await #expect(throws: DigitalOceanBandwidthError.invalidResponse) {
+            try await repeating.droplets(token: "fixture-token")
+        }
+        let unauthorized = dropletClient { _ in (403, "{}") }
+        await #expect(throws: DigitalOceanBandwidthError.unauthorized) {
+            try await unauthorized.droplets(token: "fixture-token")
+        }
+    }
+
     @Test func requestsBothPublicDirectionsAndClipsEstimatesToMeasuredIntervals() async throws {
         let client = stub { request, direction in
             let url = try #require(request.url)
@@ -186,6 +241,22 @@ struct DigitalOceanBandwidthTests {
 
     private func interval(_ start: TimeInterval, _ end: TimeInterval) -> DateInterval {
         DateInterval(start: Date(timeIntervalSince1970: start), end: Date(timeIntervalSince1970: end))
+    }
+
+    private func dropletClient(
+        responder: @escaping @Sendable (Int) -> (Int, String)
+    ) -> DigitalOceanBandwidthClient {
+        DigitalOceanBandwidthClient(transport: { request in
+            let url = try #require(request.url)
+            #expect(url.scheme == "https" && url.host == "api.digitalocean.com" && url.path == "/v2/droplets")
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer fixture-token")
+            let items = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
+            #expect(items.contains(URLQueryItem(name: "per_page", value: "200")))
+            let page = try #require(items.first(where: { $0.name == "page" })?.value.flatMap(Int.init))
+            let (status, body) = responder(page)
+            let response = try #require(HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil))
+            return (Data(body.utf8), response)
+        })
     }
 
     private func stub(

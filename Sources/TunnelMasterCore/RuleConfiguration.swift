@@ -132,22 +132,43 @@ public struct WireGuardProfile: Equatable, Sendable {
 }
 
 public struct DomainRules: Codable, Equatable, Sendable {
+    public enum Fallback: String, Codable, CaseIterable, Sendable {
+        case proxy, direct
+    }
+
     public let direct: [String]
     public let proxy: [String]
     public let useChinaIPRules: Bool
+    public let fallback: Fallback
 
-    public init(direct: [String], proxy: [String], useChinaIPRules: Bool) {
+    public init(direct: [String], proxy: [String], useChinaIPRules: Bool, fallback: Fallback = .proxy) {
         self.direct = direct
         self.proxy = proxy
         self.useChinaIPRules = useChinaIPRules
+        self.fallback = fallback
     }
 
-    public static func parse(direct: String, proxy: String, china: Bool) throws -> Self {
+    private enum CodingKeys: String, CodingKey {
+        case direct, proxy, useChinaIPRules, fallback
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            direct: try values.decode([String].self, forKey: .direct),
+            proxy: try values.decode([String].self, forKey: .proxy),
+            useChinaIPRules: try values.decode(Bool.self, forKey: .useChinaIPRules),
+            fallback: try values.decodeIfPresent(Fallback.self, forKey: .fallback) ?? .proxy
+        )
+    }
+
+    public static func parse(direct: String, proxy: String, china: Bool, fallback: Fallback = .proxy) throws -> Self {
         let separators = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ",，"))
         return try Self(
             direct: normalize(direct.components(separatedBy: separators).filter { !$0.isEmpty }),
             proxy: normalize(proxy.components(separatedBy: separators).filter { !$0.isEmpty }),
-            useChinaIPRules: china
+            useChinaIPRules: china,
+            fallback: fallback
         )
     }
 
@@ -195,14 +216,25 @@ public enum MihomoConfiguration {
         if let key = profile.presharedKey { outbound["pre-shared-key"] = key }
         if let keepalive = profile.keepalive { outbound["persistent-keepalive"] = keepalive }
         if let mtu = profile.mtu { outbound["mtu"] = mtu }
-        if !profile.dnsServers.isEmpty {
-            outbound["remote-dns-resolve"] = true
-            outbound["dns"] = profile.dnsServers
-        }
 
         // Validate loaded preferences too, since they may have been edited outside the app.
         let proxyDomains = try DomainRules.normalize(rules.proxy)
         let directDomains = try DomainRules.normalize(rules.direct)
+        let splitDNS = rules.fallback == .direct && !proxyDomains.isEmpty
+        var wireGuardResolvers = profile.dnsServers
+        if splitDNS, wireGuardResolvers.isEmpty {
+            // The default encrypted resolver must itself be reachable inside the imported peer's routes.
+            if profile.ipv4Address != nil, profile.allowedIPs.contains("0.0.0.0/0") {
+                wireGuardResolvers = ["https://1.1.1.1/dns-query"]
+            } else if profile.ipv6Address != nil, profile.allowedIPs.contains("::/0") {
+                wireGuardResolvers = ["https://[2606:4700:4700::1111]/dns-query"]
+            }
+        }
+        if !wireGuardResolvers.isEmpty {
+            outbound["remote-dns-resolve"] = true
+            outbound["dns"] = wireGuardResolvers
+        }
+
         var routing = proxyDomains.map { "DOMAIN-SUFFIX,\($0),\(outboundName)" }
         routing += directDomains.map { "DOMAIN-SUFFIX,\($0),DIRECT" }
         routing += [
@@ -223,9 +255,9 @@ public enum MihomoConfiguration {
         if rules.useChinaIPRules, let chinaIPDatabasePath, !chinaIPDatabasePath.isEmpty {
             routing.append("GEOIP,CN,DIRECT")
         }
-        routing.append("MATCH,\(outboundName)")
+        routing.append(rules.fallback == .proxy ? "MATCH,\(outboundName)" : "MATCH,DIRECT")
 
-        let configuration: [String: Any] = [
+        var configuration: [String: Any] = [
             "mixed-port": port,
             "allow-lan": false,
             "bind-address": "127.0.0.1",
@@ -237,6 +269,25 @@ public enum MihomoConfiguration {
             "proxies": [outbound],
             "rules": routing
         ]
+        if splitDNS, !wireGuardResolvers.isEmpty {
+            let throughTunnel = wireGuardResolvers.map { server in
+                switch IPFamily.of(server) {
+                case .ipv4: "udp://\(server):53#\(outboundName)"
+                case .ipv6: "udp://[\(server)]:53#\(outboundName)"
+                case nil: "\(server)#\(outboundName)"
+                }
+            }
+            configuration["dns"] = [
+                "enable": true,
+                "enhanced-mode": "redir-host",
+                "listen": "",
+                "ipv6": profile.ipv6Address != nil,
+                "nameserver": ["system"],
+                "direct-nameserver": ["system"],
+                "proxy-server-nameserver": ["system"],
+                "nameserver-policy": Dictionary(uniqueKeysWithValues: proxyDomains.map { ("+.\($0)", throughTunnel) })
+            ] as [String: Any]
+        }
         // Mihomo parses this as YAML, whose double-quoted strings reject JSON's escaped slash.
         return try JSONSerialization.data(
             withJSONObject: configuration, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]

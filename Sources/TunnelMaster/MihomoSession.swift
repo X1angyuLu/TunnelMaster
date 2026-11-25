@@ -72,11 +72,20 @@ enum MacCommand {
     }
 
     static func hasActiveVPN() -> Bool {
-        guard let output = try? capture("/usr/sbin/scutil", arguments: ["--nc", "list"]).output else {
-            return false
+        if let output = try? capture("/usr/sbin/scutil", arguments: ["--nc", "list"]).output,
+           output.split(separator: "\n").contains(where: {
+               $0.contains(" VPN (") && ($0.contains("(Connected)") || $0.contains("(Connecting)"))
+           }) {
+            return true
         }
-        return output.split(separator: "\n").contains { line in
-            line.contains(" VPN (") && (line.contains("(Connected)") || line.contains("(Connecting)"))
+        // An app can install a routed TUN without registering a macOS VPN profile.
+        let probes = [["-inet", "1.1.1.1"], ["-inet", "208.67.222.222"], ["-inet6", "2606:4700:4700::1111"]]
+        return probes.contains { probe in
+            guard let result = try? capture("/sbin/route", arguments: ["-n", "get"] + probe), result.status == 0 else {
+                return false
+            }
+            return result.output.range(of: #"(?m)^\s*interface:\s*(?:utun|tun|tap|ppp|ipsec)[0-9]+\s*$"#,
+                                       options: .regularExpression) != nil
         }
     }
 }

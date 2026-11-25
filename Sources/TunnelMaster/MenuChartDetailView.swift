@@ -184,7 +184,10 @@ struct MenuChartDetailView: View {
 
     private var historyContent: some View {
         let isServer = controls.source == .server
-        let report = isServer && server.dropletID == nil ? nil : loader.report(for: controls.range, serverID: isServer ? server.dropletID : nil)
+        let report = isServer && server.dropletID == nil ? nil : loader.report(
+            for: controls.range, serverID: isServer ? server.dropletID : nil,
+            monitoringRevision: isServer ? server.monitoringRevision : nil
+        )
         let buckets = report?.buckets ?? []
         let preferred = chartSelection.active ?? controls.anchor
         let selected = preferred.flatMap { date in bucket(at: date, in: buckets) }
@@ -380,9 +383,14 @@ struct MenuChartDetailView: View {
 
     private var loadRequest: MenuChartDetailRequest {
         let isServer = controls.source == .server
+        let revision = switch controls.source {
+        case .live: 0
+        case .local: store.historyRevision
+        case .server: server.monitoringRevision
+        }
         return MenuChartDetailRequest(source: controls.source, range: controls.range,
                                       serverID: isServer ? server.dropletID : nil,
-                                      revision: controls.source == .local ? store.historyRevision : 0,
+                                      revision: revision,
                                       refresh: isServer ? controls.refresh : 0)
     }
 

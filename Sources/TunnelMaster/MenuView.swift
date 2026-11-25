@@ -1,8 +1,14 @@
 import AppKit
 import SwiftUI
+import TunnelMasterCore
 
 @MainActor
 struct MenuView: View {
+    private static let aiProxyDomains = [
+        "openai.com", "chatgpt.com", "oaistatic.com", "oaiusercontent.com", "oaistatsig.com",
+        "anthropic.com", "claude.ai", "claude.com", "claudeusercontent.com"
+    ]
+
     @ObservedObject var store: TunnelStore
     @ObservedObject private var serverSource: DigitalOceanSource
     @AppStorage("menuTrafficTab") private var selectedTab = MenuMetricsTab.live
@@ -46,8 +52,10 @@ struct MenuView: View {
 
     private var overview: some View {
         let request = metricsRequest
-        let monthlyRequest = DigitalOceanMonthlyTransferRequest(dropletID: serverSource.dropletID,
-                                                               refresh: request.refresh)
+        let monthlyRequest = DigitalOceanMonthlyTransferRequest(
+            dropletID: serverSource.dropletID, monitoringRevision: serverSource.monitoringRevision,
+            refresh: metricsView.refresh
+        )
         return VStack(alignment: .leading, spacing: 10) {
             header
             connectionCard
@@ -76,9 +84,13 @@ struct MenuView: View {
                     notice("之前的代理会话已停止。请先恢复系统代理。", symbol: "arrow.uturn.backward", color: .orange)
                 } else if store.changedNetwork {
                     notice("网络已切换，请断开后重新连接。", symbol: "wifi.exclamationmark", color: .orange)
+                } else if store.proxyOverridden {
+                    notice("当前系统代理设置已变更。", symbol: "exclamationmark.circle", color: .orange)
                 } else if isDisconnected {
                     if store.observedFullTunnel {
-                        notice("请先断开当前 macOS VPN。", symbol: "info.circle")
+                        notice("检测到其他 VPN 或 TUN 正在接管网络。", symbol: "info.circle")
+                    } else if store.observedOtherProxy {
+                        notice("当前已有其他系统代理正在使用。", symbol: "info.circle")
                     } else if !store.hasRuleEngine {
                         notice("安装 Mihomo 后即可使用代理。", symbol: "info.circle")
                     } else if store.profileName == nil {
@@ -170,7 +182,7 @@ struct MenuView: View {
     private var connectionCard: some View {
         HStack(spacing: 11) {
             VStack(alignment: .leading, spacing: 4) {
-                Label("节点", systemImage: "point.3.connected.trianglepath.dotted")
+                Label("代理节点", systemImage: "point.3.connected.trianglepath.dotted")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 Text(store.profileName ?? "尚未选择")
@@ -185,7 +197,7 @@ struct MenuView: View {
 
             HStack(alignment: .center, spacing: 5) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Label("出口 IP", systemImage: "globe.americas")
+                    Label("探测出口 IP", systemImage: "globe.americas")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                     Text(store.exitIP ?? "—")
@@ -209,7 +221,7 @@ struct MenuView: View {
                 }
                 .buttonStyle(.borderless)
                 .disabled(!isConnected || store.checkingExit || isBusy)
-                .help("检测当前出口 IP")
+                .help("按当前分流规则探测连接的出口 IP")
                 .accessibilityLabel("检测当前出口 IP")
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -303,7 +315,9 @@ struct MenuView: View {
             let scope = metricsRequest.scope
             let completed = metricsView.completedScope == scope
             MenuHistoryCard(
-                report: menuStats.report(for: scope.range, serverID: scope.dropletID), range: scope.range,
+                report: completed ? menuStats.report(for: scope.range, serverID: scope.dropletID,
+                                                     monitoringRevision: scope.monitoringRevision) : nil,
+                range: scope.range,
                 isServer: activeTab == .server, isLoading: !completed || menuStats.isLoading,
                 errorMessage: completed ? menuStats.errorMessage : nil
             )
@@ -331,7 +345,8 @@ struct MenuView: View {
     private var metricsRequest: MenuMetricsRequest {
         MenuMetricsRequest(
             scope: MenuMetricsScope(tab: activeTab, range: selectedRange,
-                                    dropletID: activeTab == .server ? serverSource.dropletID : nil),
+                                    dropletID: activeTab == .server ? serverSource.dropletID : nil,
+                                    monitoringRevision: activeTab == .server ? serverSource.monitoringRevision : nil),
             revision: activeTab == .local ? store.historyRevision : 0,
             refresh: activeTab == .server ? metricsView.refresh : 0
         )
@@ -434,10 +449,34 @@ struct MenuView: View {
 
             Group {
                 domainEditor("始终直连", example: "bilibili.com", domains: $editor.directDomains)
-                domainEditor("始终走隧道", example: "example.com", domains: $editor.proxyDomains)
+                domainEditor("始终走隧道", example: "chatgpt.com", domains: $editor.proxyDomains)
 
                 Toggle("中国大陆 IP 直连", isOn: $editor.chinaIPDirect)
                     .font(.callout)
+
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 10) {
+                        Text("未匹配的公网流量")
+                            .font(.callout.weight(.medium))
+                        Spacer()
+                        Picker("未匹配的公网流量", selection: $editor.fallback) {
+                            Text("走隧道").tag(DomainRules.Fallback.proxy)
+                            Text("直连").tag(DomainRules.Fallback.direct)
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .frame(width: 148)
+                    }
+
+                    Button(action: applyAIPreset) {
+                        Label("添加 OpenAI / Claude 分流预设", systemImage: "plus.circle")
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                    Text(editor.presetNotice ?? "追加常用域名到隧道列表，并将未匹配流量设为直连。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
             .disabled(editor.isSaving)
 
@@ -496,8 +535,35 @@ struct MenuView: View {
         editor.directDomains = store.directDomains
         editor.proxyDomains = store.proxyDomains
         editor.chinaIPDirect = store.useChinaIPRules
+        editor.fallback = store.ruleFallback
+        editor.presetNotice = nil
         editor.errorMessage = nil
         editor.isEditing = true
+    }
+
+    private func applyAIPreset() {
+        do {
+            let existing = try DomainRules.parse(
+                direct: editor.directDomains, proxy: editor.proxyDomains, china: editor.chinaIPDirect
+            )
+            let missing = Self.aiProxyDomains.filter { !existing.proxy.contains($0) }
+            let conflicts = missing.filter { domain in
+                existing.direct.contains { direct in
+                    domain == direct || domain.hasSuffix("." + direct) || direct.hasSuffix("." + domain)
+                }
+            }
+            let additional = missing.filter { !conflicts.contains($0) }
+            if !additional.isEmpty {
+                if editor.proxyDomains.last?.isNewline == false { editor.proxyDomains.append("\n") }
+                editor.proxyDomains.append(additional.joined(separator: "\n"))
+            }
+            editor.fallback = .direct
+            editor.presetNotice = conflicts.isEmpty ? nil : "本次跳过 \(conflicts.count) 个与已有直连规则重叠的域名。"
+            editor.errorMessage = nil
+        } catch {
+            editor.presetNotice = nil
+            editor.errorMessage = error.localizedDescription
+        }
     }
 
     private func saveEditorRules() {
@@ -508,7 +574,8 @@ struct MenuView: View {
             defer { editor.isSaving = false }
             do {
                 try await store.saveRules(
-                    direct: editor.directDomains, proxy: editor.proxyDomains, china: editor.chinaIPDirect
+                    direct: editor.directDomains, proxy: editor.proxyDomains, china: editor.chinaIPDirect,
+                    fallback: editor.fallback
                 )
                 editor.isEditing = false
             } catch {
@@ -542,7 +609,7 @@ struct MenuView: View {
     }
 
     private var connectionUnavailable: Bool {
-        !store.hasRuleEngine || store.profileName == nil || store.observedFullTunnel
+        !store.hasRuleEngine || store.profileName == nil || store.observedFullTunnel || store.observedOtherProxy
     }
 
     private var statusColor: Color {
@@ -597,6 +664,7 @@ private struct MenuMetricsScope: Hashable {
     let tab: MenuMetricsTab
     let range: MenuTrafficRange
     let dropletID: String?
+    let monitoringRevision: Int?
 }
 
 private struct MenuMetricsRequest: Equatable {
@@ -619,6 +687,8 @@ private final class RuleEditorState: ObservableObject {
     @Published var directDomains = ""
     @Published var proxyDomains = ""
     @Published var chinaIPDirect = true
+    @Published var fallback = DomainRules.Fallback.proxy
+    @Published var presetNotice: String?
     @Published var isSaving = false
     @Published var errorMessage: String?
 }

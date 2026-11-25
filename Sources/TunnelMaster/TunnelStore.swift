@@ -57,7 +57,10 @@ final class TunnelStore: ObservableObject {
     @Published private(set) var directDomains: String
     @Published private(set) var proxyDomains: String
     @Published private(set) var useChinaIPRules: Bool
+    @Published private(set) var ruleFallback: DomainRules.Fallback
     @Published private(set) var observedFullTunnel = false
+    @Published private(set) var observedOtherProxy = false
+    @Published private(set) var proxyOverridden = false
     @Published private(set) var checkingExit = false
     @Published private(set) var hasRuleEngine = MihomoSession.executable != nil
     @Published private(set) var needsProxyRecovery = false
@@ -103,6 +106,7 @@ final class TunnelStore: ObservableObject {
         """
         proxyDomains = defaults.string(forKey: "proxyDomains") ?? ""
         useChinaIPRules = defaults.bool(forKey: "useChinaIPRules")
+        ruleFallback = defaults.string(forKey: "ruleFallback").flatMap(DomainRules.Fallback.init(rawValue:)) ?? .proxy
 
         storage = Self.storageDirectory()
         digitalOcean = DigitalOceanSource(storage: storage)
@@ -191,25 +195,32 @@ final class TunnelStore: ObservableObject {
         }
     }
 
-    func saveRules(direct: String, proxy: String, china: Bool) async throws {
+    func saveRules(direct: String, proxy: String, china: Bool, fallback: DomainRules.Fallback) async throws {
         guard canEditConfiguration else { throw SessionError.configurationUnavailable }
-        let rules = try DomainRules.parse(direct: direct, proxy: proxy, china: china)
+        let rules = try DomainRules.parse(direct: direct, proxy: proxy, china: china, fallback: fallback)
         configurationChange = .rules
         errorMessage = nil
-        defer { configurationChange = nil }
+        var recheckExit = false
+        defer {
+            configurationChange = nil
+            if recheckExit { refreshExitAfterRuleChange() }
+        }
         if status == .connected, mode == .rules {
             guard let session, let profile else { throw SessionError.configurationUnavailable }
             let previous = MihomoSession.Configuration(profile: profile, rules: try routingRules(for: mode))
             let next = MihomoSession.Configuration(profile: profile, rules: rules)
             try await applyLiveConfiguration(session: session, from: previous, to: next)
+            recheckExit = previous != next
         }
         directDomains = rules.direct.joined(separator: "\n")
         proxyDomains = rules.proxy.joined(separator: "\n")
         useChinaIPRules = rules.useChinaIPRules
+        ruleFallback = rules.fallback
         let defaults = UserDefaults.standard
         defaults.set(directDomains, forKey: "directDomains")
         defaults.set(proxyDomains, forKey: "proxyDomains")
         defaults.set(useChinaIPRules, forKey: "useChinaIPRules")
+        defaults.set(ruleFallback.rawValue, forKey: "ruleFallback")
     }
 
     func refresh() {
@@ -227,6 +238,8 @@ final class TunnelStore: ObservableObject {
         let sessionRunning = session?.isRunning == true
         needsProxyRecovery = !sessionRunning && systemProxy.hasSavedState()
         changedNetwork = sessionRunning && !systemProxy.appliesToPrimaryService()
+        observedOtherProxy = !sessionRunning && !needsProxyRecovery && systemProxy.hasActiveProxy()
+        proxyOverridden = !changedNetwork && session.map { $0.isRunning && !systemProxy.ownsActiveProxy(port: $0.port) } == true
         Task {
             let anotherVPN = await Task.detached { MacCommand.hasActiveVPN() }.value
             observedFullTunnel = anotherVPN
@@ -268,6 +281,13 @@ final class TunnelStore: ObservableObject {
         }
     }
 
+    private func refreshExitAfterRuleChange() {
+        exitCheckID = nil
+        checkingExit = false
+        exitIP = nil
+        checkExit()
+    }
+
     func quit() {
         guard canEditConfiguration else { return }
         if session != nil || systemProxy.hasSavedState() {
@@ -304,10 +324,15 @@ final class TunnelStore: ObservableObject {
         configurationChange = .mode
         errorMessage = nil
         Task {
-            defer { configurationChange = nil }
+            var recheckExit = false
+            defer {
+                configurationChange = nil
+                if recheckExit { refreshExitAfterRuleChange() }
+            }
             do {
                 try await applyLiveConfiguration(session: session, from: previous, to: replacement)
                 mode = next
+                recheckExit = previous != replacement
             } catch {
                 errorMessage = error.localizedDescription
                 refresh()
@@ -336,7 +361,9 @@ final class TunnelStore: ObservableObject {
 
     private func routingRules(for mode: TunnelMode) throws -> DomainRules {
         switch mode {
-        case .rules: try DomainRules.parse(direct: directDomains, proxy: proxyDomains, china: useChinaIPRules)
+        case .rules:
+            try DomainRules.parse(direct: directDomains, proxy: proxyDomains, china: useChinaIPRules,
+                                  fallback: ruleFallback)
         case .global: DomainRules(direct: [], proxy: [], useChinaIPRules: false)
         }
     }
@@ -547,7 +574,13 @@ final class TunnelStore: ObservableObject {
                 observedFullTunnel = hasAnotherVPN
                 guard !hasAnotherVPN else {
                     status = .disconnected
-                    errorMessage = "请先断开当前 macOS VPN，再连接 TunnelMaster。"
+                    errorMessage = "检测到其他 VPN 或 TUN 正在接管网络。"
+                    return
+                }
+                observedOtherProxy = systemProxy.hasActiveProxy()
+                guard !observedOtherProxy else {
+                    status = .disconnected
+                    errorMessage = "当前已有其他系统代理正在使用。"
                     return
                 }
 

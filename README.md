@@ -5,9 +5,11 @@
 | 模式 | 路由 |
 | --- | --- |
 | 全部代理 | 遵循系统代理的公网连接走 WireGuard 出口，保留局域网直连 |
-| 规则分流 | 按自定义域名和可选的中国大陆 IP 规则处理，剩余公网连接走 WireGuard 出口 |
+| 规则分流 | 按自定义域名和可选的中国大陆 IP 规则处理。剩余公网连接可设为走 WireGuard 或直连 |
 
 两个模式都使用同一个 [Mihomo](https://github.com/MetaCubeX/mihomo) 内核和同一个 WireGuard 配置。连接后可以直接点选另一种模式，应用会通过私有控制套接字更新规则并保留代理进程和端口。新建连接按更新后的规则路由。规则中的域名也匹配子域名，指定走隧道的域名优先于直连清单。启用中国大陆 IP 规则时，应用会从 [MetaCubeX 数据仓库](https://github.com/MetaCubeX/meta-rules-dat) 下载并缓存 GeoIP 数据。
+
+「编辑规则」可添加 OpenAI / Claude 常用域名到隧道规则，并将未匹配流量设为直连。预设会跳过与现有直连规则重叠的域名。未匹配流量设为直连时，Mihomo 使用系统 DNS 解析直连域名，隧道规则中的域名使用 WireGuard 配置指定的 DNS。在允许访问公网解析器的全地址 WireGuard 配置中，未设置 DNS 时使用通过隧道的加密 DNS。系统代理模式下，应用自行发出的 DNS 查询仍由其自身处理。 [Mihomo DNS 配置](https://wiki.metacubex.one/en/config/dns/)
 
 ## 在 Mac 上使用
 
@@ -24,7 +26,7 @@
    ```
 
 3. 打开 `dist/TunnelMaster.app`。在菜单栏点 TunnelMaster，导入已有的 WireGuard `.conf`。
-4. 在同时使用同一个节点前，先断开当前的 WireGuard 或其他 VPN。从 TunnelMaster 选择模式并连接。macOS 可能弹出管理员授权。
+4. 在 TunnelMaster 选择模式并连接。若已有系统代理、VPN 或公开流量经由其他 TUN 接口路由，TunnelMaster 会在接管前提示。macOS 可能弹出管理员授权。
 5. 断开连接或使用菜单里的退出按钮时，应用会尝试恢复当前会话之前的系统代理设置。
 
 连接时也可以通过菜单底部的「编辑规则…」和「导入配置…」修改设置。在「规则分流」下保存后，新建连接会使用新规则。「全部代理」下保存的规则会在切回「规则分流」时生效。重新导入 WireGuard 会沿用现有代理端口，并通过新节点做连通性检查。检查通过后才保存配置，检查失败时会尝试恢复原配置。切换节点时，部分应用可能需要重新连接。
@@ -37,7 +39,7 @@
 
 「流量统计」里的 DigitalOcean 来源读取指定 Droplet 的公网入站和出站速率，同一台服务器上各设备的流量都会计入。连接时输入 Droplet ID 和具有 `monitoring:read` 权限的 DigitalOcean API 令牌。默认使用 macOS 钥匙串，也可以在「DigitalOcean → 设置」中选择「本机文件」。已有配置可直接把令牌从钥匙串复制到本机文件，macOS 可能会要求授权这次读取。本机文件位于应用数据目录，随本机配置保留，访问权限限定为当前 macOS 用户。同一用户运行的程序可读取其中的明文令牌。图表直接使用 [Monitoring API](https://docs.digitalocean.com/reference/api/reference/monitoring/#get-droplet-bandwidth-metrics) 返回的采样，进出站用量按已覆盖的时段估算。结算用量和团队流量池在 [DigitalOcean Billing](https://cloud.digitalocean.com/account/billing) 查看。
 
-配置 DigitalOcean 后，菜单和流量统计页会显示当前 UTC 自然月的公网出站估算、已累积额度及预计余量。预计余量按服务器在当前套餐下保留到月底计算。出站采样覆盖低于 95% 时仅显示可估算的用量。DigitalOcean 实际用量和额度按团队合并，具体计费规则见其[带宽账单说明](https://docs.digitalocean.com/platform/billing/bandwidth/)。
+配置 DigitalOcean 后，菜单和流量统计页会显示当前 UTC 自然月的公网出站估算、已累积额度及预计余量。若令牌具有 `droplet:read` 权限，可以通过卡片上的服务器名称切换统计对象。代理节点由连接设置单独控制。预计余量按服务器在当前套餐下保留到月底计算。出站采样覆盖低于 95% 时仅显示可估算的用量。DigitalOcean 实际用量和额度按团队合并，具体计费规则见其[带宽账单说明](https://docs.digitalocean.com/platform/billing/bandwidth/)。
 
 安装应用后，也可以用 `open 'tunnelmaster://statistics/digitalocean'` 打开 DigitalOcean 统计页。
 

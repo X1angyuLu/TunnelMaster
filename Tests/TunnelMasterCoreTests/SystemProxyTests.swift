@@ -10,6 +10,13 @@ struct SystemProxyTests {
         "ProxyAutoConfigEnable": 0, "ProxyAutoDiscoveryEnable": 0
     ]
 
+    @Test func recognizesActiveProxyAndAutomaticConfiguration() {
+        #expect(SystemProxyController.hasEnabledProxy(in: installed))
+        #expect(SystemProxyController.hasEnabledProxy(in: ["ProxyAutoConfigEnable": true]))
+        #expect(SystemProxyController.hasEnabledProxy(in: ["ProxyAutoDiscoveryEnable": 1]))
+        #expect(!SystemProxyController.hasEnabledProxy(in: ["HTTPEnable": 0, "HTTPProxy": "old.example"]))
+    }
+
     @Test func restoresPriorProxyGroupsAndRemovesPreviouslyAbsentFields() throws {
         let previous: [String: Any] = [
             "HTTPEnable": 0, "HTTPProxy": "previous.example", "HTTPPort": 9090,

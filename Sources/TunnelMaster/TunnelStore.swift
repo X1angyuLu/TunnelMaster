@@ -68,7 +68,7 @@ final class TunnelStore: ObservableObject {
     @Published private(set) var trafficHistory: [TrafficSample] = []
     @Published private(set) var historyRevision = 0
     @Published private(set) var historySaveIssue = false
-    let digitalOcean = DigitalOceanSource()
+    let digitalOcean: DigitalOceanSource
 
     private let storage: URL
     private let systemProxy: SystemProxyController
@@ -105,6 +105,7 @@ final class TunnelStore: ObservableObject {
         useChinaIPRules = defaults.bool(forKey: "useChinaIPRules")
 
         storage = Self.storageDirectory()
+        digitalOcean = DigitalOceanSource(storage: storage)
         systemProxy = SystemProxyController(stateURL: storage.appendingPathComponent("proxy-recovery.json"))
         historyStore = TrafficHistoryStore(url: storage.appendingPathComponent("traffic-history.sqlite3"))
 
@@ -636,7 +637,7 @@ final class TunnelStore: ObservableObject {
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
     }
 
-    nonisolated fileprivate static func privateWrite(_ data: Data, to url: URL) throws {
+    nonisolated static func privateWrite(_ data: Data, to url: URL) throws {
         try data.write(to: url, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }

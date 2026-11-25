@@ -1,7 +1,21 @@
 import Combine
+import Darwin
 import Foundation
 import Security
 import TunnelMasterCore
+
+enum DigitalOceanCredentialStorage: String, CaseIterable, Identifiable {
+    case keychain, localFile
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .keychain: "macOS 钥匙串"
+        case .localFile: "本机文件"
+        }
+    }
+}
 
 @MainActor
 final class DigitalOceanSource: ObservableObject {
@@ -11,6 +25,7 @@ final class DigitalOceanSource: ObservableObject {
     }
 
     @Published private(set) var dropletID: String?
+    @Published private(set) var credentialStorage: DigitalOceanCredentialStorage
     @Published private(set) var report: DigitalOceanBandwidthReport?
     @Published private(set) var lastUpdated: Date?
     @Published private(set) var isLoading = false
@@ -18,18 +33,24 @@ final class DigitalOceanSource: ObservableObject {
 
     private let defaults = UserDefaults.standard
     private let client = DigitalOceanBandwidthClient()
-    private let preference = "digitalOceanDropletID"
+    private let preference = "digitalOceanConfiguration"
+    private let legacyPreference = "digitalOceanDropletID"
+    private let localCredentialFile: MonitoringLocalFile
     private var requestID: UUID?
     private var reportDays: Int?
     private var snapshots: [Int: Snapshot] = [:]
     private var pending: [Int: Task<Snapshot, Error>] = [:]
     private var credentialRevision = UUID()
 
-    init() {
-        dropletID = defaults.string(forKey: preference)
+    init(storage: URL) {
+        localCredentialFile = MonitoringLocalFile(directory: storage)
+        let configuration = defaults.dictionary(forKey: preference)
+        credentialStorage = (configuration?["storage"] as? String)
+            .flatMap(DigitalOceanCredentialStorage.init(rawValue:)) ?? .keychain
+        dropletID = configuration?["dropletID"] as? String ?? defaults.string(forKey: legacyPreference)
     }
 
-    func credentials(dropletID: String, token: String) async throws {
+    func credentials(dropletID: String, token: String, storage: DigitalOceanCredentialStorage) async throws {
         let credential = MonitoringCredential(
             dropletID: dropletID.trimmingCharacters(in: .whitespacesAndNewlines),
             token: token.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -39,13 +60,27 @@ final class DigitalOceanSource: ObservableObject {
         let initial = try await fetch(credential, days: 1)
         try Task.checkCancellation()
         guard requestID == request else { throw CancellationError() }
-        try MonitoringKeychain.store(credential)
+        switch storage {
+        case .keychain:
+            try MonitoringKeychain.store(credential)
+            if credentialStorage == .localFile { try localCredentialFile.remove() }
+        case .localFile:
+            try localCredentialFile.store(credential)
+        }
         clearSnapshots()
-        self.dropletID = credential.dropletID
-        defaults.set(credential.dropletID, forKey: preference)
+        saveConfiguration(dropletID: credential.dropletID, storage: storage)
         let snapshot = Snapshot(report: initial, fetchedAt: .now)
         snapshots[1] = snapshot
         updateReport(snapshot, days: 1)
+    }
+
+    func saveCredentialLocally() throws {
+        guard credentialStorage == .keychain, let dropletID else { return }
+        let credential = try MonitoringKeychain.load()
+        guard credential.dropletID == dropletID else { throw DigitalOceanBandwidthError.invalidDropletID }
+        try localCredentialFile.store(credential)
+        saveConfiguration(dropletID: dropletID, storage: .localFile)
+        errorMessage = nil
     }
 
     func load(days: Int) async {
@@ -70,7 +105,10 @@ final class DigitalOceanSource: ObservableObject {
     }
 
     func removeCredentials() throws {
-        try MonitoringKeychain.remove()
+        switch credentialStorage {
+        case .keychain: try MonitoringKeychain.remove()
+        case .localFile: try localCredentialFile.remove()
+        }
         clearSnapshots()
         requestID = nil
         isLoading = false
@@ -79,7 +117,9 @@ final class DigitalOceanSource: ObservableObject {
         report = nil
         lastUpdated = nil
         reportDays = nil
+        defaults.removeObject(forKey: legacyPreference)
         defaults.removeObject(forKey: preference)
+        credentialStorage = .keychain
     }
 
     func bandwidth(days: Int, maxAge: TimeInterval) async throws -> Snapshot {
@@ -96,7 +136,10 @@ final class DigitalOceanSource: ObservableObject {
             return snapshot
         }
 
-        let credential = try MonitoringKeychain.load()
+        let credential = switch credentialStorage {
+        case .keychain: try MonitoringKeychain.load()
+        case .localFile: try localCredentialFile.load()
+        }
         guard credential.dropletID == dropletID else { throw DigitalOceanBandwidthError.invalidDropletID }
         let request = Task { Snapshot(report: try await fetch(credential, days: days), fetchedAt: .now) }
         pending[days] = request
@@ -114,6 +157,12 @@ final class DigitalOceanSource: ObservableObject {
         pending.values.forEach { $0.cancel() }
         pending.removeAll()
         snapshots.removeAll()
+    }
+
+    private func saveConfiguration(dropletID: String, storage: DigitalOceanCredentialStorage) {
+        defaults.set(["dropletID": dropletID, "storage": storage.rawValue], forKey: preference)
+        self.dropletID = dropletID
+        credentialStorage = storage
     }
 
     private func beginRequest() -> UUID {
@@ -148,6 +197,65 @@ final class DigitalOceanSource: ObservableObject {
 private struct MonitoringCredential: Codable {
     let dropletID: String
     let token: String
+}
+
+private struct MonitoringLocalFile {
+    let directory: URL
+
+    private var url: URL { directory.appendingPathComponent("digitalocean-credentials.json") }
+
+    func store(_ credential: MonitoringCredential) throws {
+        do {
+            let files = FileManager.default
+            try files.createDirectory(at: directory, withIntermediateDirectories: true,
+                                      attributes: [.posixPermissions: 0o700])
+            let attributes = try files.attributesOfItem(atPath: directory.path)
+            guard hasPrivateAccess(attributes), attributes[.type] as? FileAttributeType == .typeDirectory else {
+                throw LocalFileError.unavailable
+            }
+            let staged = directory.appendingPathComponent(".digitalocean-\(UUID().uuidString)")
+            defer { try? files.removeItem(at: staged) }
+            let data = try JSONEncoder().encode(credential)
+            try TunnelStore.privateWrite(data, to: staged)
+            guard rename(staged.path, url.path) == 0 else { throw LocalFileError.unavailable }
+        } catch {
+            throw LocalFileError.unavailable
+        }
+    }
+
+    func load() throws -> MonitoringCredential {
+        do {
+            let descriptor = open(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
+            guard descriptor >= 0 else { throw LocalFileError.unavailable }
+            let input = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+            defer { try? input.close() }
+            var info = stat()
+            guard fstat(descriptor, &info) == 0, info.st_uid == getuid(),
+                  info.st_mode & S_IFMT == S_IFREG, info.st_mode & 0o077 == 0,
+                  (1...16_384).contains(info.st_size), let data = try input.read(upToCount: 16_385),
+                  data.count <= 16_384 else { throw LocalFileError.unavailable }
+            return try JSONDecoder().decode(MonitoringCredential.self, from: data)
+        } catch {
+            throw LocalFileError.unavailable
+        }
+    }
+
+    func remove() throws {
+        // unlink removes only a file entry, so an unexpected directory is never deleted.
+        guard unlink(url.path) == 0 || errno == ENOENT else { throw LocalFileError.unavailable }
+    }
+
+    private func hasPrivateAccess(_ attributes: [FileAttributeKey: Any]) -> Bool {
+        guard let mode = attributes[.posixPermissions] as? NSNumber,
+              let owner = attributes[.ownerAccountID] as? NSNumber else { return false }
+        return owner.uint32Value == getuid() && mode.intValue & 0o077 == 0
+    }
+
+    private enum LocalFileError: LocalizedError {
+        case unavailable
+
+        var errorDescription: String? { "无法访问本机 DigitalOcean 令牌文件。请在设置中重新保存令牌。" }
+    }
 }
 
 private enum MonitoringKeychain {

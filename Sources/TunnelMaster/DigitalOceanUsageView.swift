@@ -6,12 +6,17 @@ import TunnelMasterCore
 struct DigitalOceanUsageView: View {
     @ObservedObject var source: DigitalOceanSource
     @AppStorage("digitalOceanUsageDays") private var range = DigitalOceanUsageRange.day
-    @StateObject private var state = DigitalOceanUsageState()
+    @StateObject private var state: DigitalOceanUsageState
 
     private static let inboundColor = Color.teal
     private static let outboundColor = Color.purple
     private static let billingURL = URL(string: "https://cloud.digitalocean.com/account/billing")!
     private static let tokensURL = URL(string: "https://cloud.digitalocean.com/account/api/tokens")!
+
+    init(source: DigitalOceanSource) {
+        self.source = source
+        _state = StateObject(wrappedValue: DigitalOceanUsageState(storage: source.credentialStorage))
+    }
 
     private var report: DigitalOceanBandwidthReport? {
         guard let report = source.report,
@@ -79,6 +84,7 @@ struct DigitalOceanUsageView: View {
 
             Button {
                 state.dropletID = id
+                state.credentialStorage = source.credentialStorage
                 state.configurationError = nil
                 state.isEditing = true
             } label: {
@@ -189,7 +195,7 @@ struct DigitalOceanUsageView: View {
             Label(state.isEditing ? "DigitalOcean 设置" : "连接 DigitalOcean 监控", systemImage: "server.rack")
                 .font(.title3.weight(.semibold))
                 .accessibilityAddTraits(.isHeader)
-            Text("填入这台服务器的 Droplet ID 和具有 monitoring:read 权限的 Token。保存的 Token 存放在这台 Mac 的钥匙串。")
+            Text("填入这台服务器的 Droplet ID 和具有 monitoring:read 权限的 Token。")
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
@@ -198,6 +204,15 @@ struct DigitalOceanUsageView: View {
                     .textFieldStyle(.roundedBorder)
                 SecureField("API Token", text: $state.token)
                     .textFieldStyle(.roundedBorder)
+                Picker("Token 存储位置", selection: $state.credentialStorage) {
+                    ForEach(DigitalOceanCredentialStorage.allCases) { storage in
+                        Text(storage.title).tag(storage)
+                    }
+                }
+                .pickerStyle(.menu)
+                Text(storageDescription)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             .frame(maxWidth: 430)
             .disabled(state.saving)
@@ -207,11 +222,11 @@ struct DigitalOceanUsageView: View {
             }
 
             HStack(spacing: 12) {
-                Button("验证并保存", action: saveCredentials)
+                Button(canMigrateToLocalFile ? "保存到本机文件" : "验证并保存", action: saveCredentials)
                     .buttonStyle(.borderedProminent)
                     .disabled(!canSave)
                 if state.saving {
-                    ProgressView().controlSize(.small).accessibilityLabel("正在验证凭据")
+                    ProgressView().controlSize(.small).accessibilityLabel("正在保存凭据")
                 }
                 if state.isEditing {
                     Button("取消", action: closeConfiguration)
@@ -232,7 +247,9 @@ struct DigitalOceanUsageView: View {
         .confirmationDialog("移除 DigitalOcean 数据源？", isPresented: $state.confirmRemoval, titleVisibility: .visible) {
             Button("移除", role: .destructive, action: removeCredentials)
         } message: {
-            Text("这会从本机钥匙串移除保存的 API Token。")
+            Text(source.credentialStorage == .localFile
+                 ? "这会删除本机令牌文件和数据源配置。"
+                 : "这会从钥匙串移除令牌，并删除数据源配置。")
         }
     }
 
@@ -245,25 +262,53 @@ struct DigitalOceanUsageView: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 
+    private var dropletIDDraft: String { state.dropletID.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var tokenDraft: String { state.token.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    private var canMigrateToLocalFile: Bool {
+        state.credentialStorage == .localFile && source.credentialStorage == .keychain
+            && source.dropletID == dropletIDDraft && tokenDraft.isEmpty
+    }
+
+    private var storageDescription: String {
+        switch state.credentialStorage {
+        case .keychain:
+            "Token 保存在这台 Mac 的钥匙串。"
+        case .localFile:
+            if canMigrateToLocalFile {
+                "可复制钥匙串里的现有 Token，macOS 可能会要求授权读取。应用将改用本机文件中的明文 Token，同一 macOS 用户运行的程序也可读取。"
+            } else {
+                "Token 以明文保存在本机应用数据目录。以当前 macOS 用户身份运行的程序可读取。"
+            }
+        }
+    }
+
     private var canSave: Bool {
-        !state.saving && (UInt64(state.dropletID.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0) > 0
-            && !state.token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !state.saving && (UInt64(dropletIDDraft) ?? 0) > 0 && (canMigrateToLocalFile || !tokenDraft.isEmpty)
     }
 
     private func saveCredentials() {
-        let id = state.dropletID.trimmingCharacters(in: .whitespacesAndNewlines)
-        let token = state.token.trimmingCharacters(in: .whitespacesAndNewlines)
+        let id = dropletIDDraft
+        let token = tokenDraft
+        let storage = state.credentialStorage
+        let migrating = canMigrateToLocalFile
         state.token = ""
         state.configurationError = nil
         state.saving = true
         Task {
             defer { state.saving = false }
             do {
-                try await source.credentials(dropletID: id, token: token)
-                range = .day
+                if migrating {
+                    try source.saveCredentialLocally()
+                    state.refresh += 1
+                } else {
+                    try await source.credentials(dropletID: id, token: token, storage: storage)
+                    range = .day
+                }
                 closeConfiguration()
             } catch {
-                state.configurationError = (error as? LocalizedError)?.errorDescription ?? "无法验证 DigitalOcean 凭据。"
+                state.configurationError = (error as? LocalizedError)?.errorDescription
+                    ?? (migrating ? "无法将 DigitalOcean 凭据迁移到本机文件。" : "无法验证 DigitalOcean 凭据。")
             }
         }
     }
@@ -280,6 +325,7 @@ struct DigitalOceanUsageView: View {
 
     private func closeConfiguration() {
         state.token = ""
+        state.credentialStorage = source.credentialStorage
         state.configurationError = nil
         state.isEditing = false
     }
@@ -602,8 +648,13 @@ private final class DigitalOceanUsageState: ObservableObject {
     @Published var configurationError: String?
     @Published var dropletID = ""
     @Published var token = ""
+    @Published var credentialStorage: DigitalOceanCredentialStorage
     @Published var refresh = 0
     var completedRefresh = 0
+
+    init(storage: DigitalOceanCredentialStorage) {
+        credentialStorage = storage
+    }
 }
 
 private struct DigitalOceanPanel: ViewModifier {

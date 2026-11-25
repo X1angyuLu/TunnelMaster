@@ -209,7 +209,7 @@ struct DigitalOceanUsageView: View {
                         Text(storage.title).tag(storage)
                     }
                 }
-                .pickerStyle(.menu)
+                .pickerStyle(.segmented)
                 Text(storageDescription)
                     .font(.caption)
                     .foregroundStyle(.secondary)

@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import TunnelMenuCore
+@testable import TunnelMasterCore
 
 struct SystemProxyTests {
     private let installed: [String: Any] = [

@@ -77,7 +77,7 @@ struct MenuView: View {
                 .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
                 .accessibilityHidden(true)
 
-            Text("TunnelMenu")
+            Text("TunnelMaster")
                 .font(.system(.headline, design: .rounded))
 
             Spacer(minLength: 6)
@@ -190,8 +190,8 @@ struct MenuView: View {
                 Image(systemName: "power")
             }
             .disabled(isBusy)
-            .help("退出 TunnelMenu")
-            .accessibilityLabel("退出 TunnelMenu")
+            .help("退出 TunnelMaster")
+            .accessibilityLabel("退出 TunnelMaster")
         }
         .buttonStyle(.borderless)
         .font(.caption)

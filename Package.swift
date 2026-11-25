@@ -2,12 +2,12 @@
 import PackageDescription
 
 let package = Package(
-    name: "TunnelMenu",
+    name: "TunnelMaster",
     platforms: [.macOS(.v13)],
-    products: [.executable(name: "TunnelMenu", targets: ["TunnelMenu"])],
+    products: [.executable(name: "TunnelMaster", targets: ["TunnelMaster"])],
     targets: [
-        .target(name: "TunnelMenuCore"),
-        .executableTarget(name: "TunnelMenu", dependencies: ["TunnelMenuCore"]),
-        .testTarget(name: "TunnelMenuCoreTests", dependencies: ["TunnelMenuCore"]),
+        .target(name: "TunnelMasterCore"),
+        .executableTarget(name: "TunnelMaster", dependencies: ["TunnelMasterCore"]),
+        .testTarget(name: "TunnelMasterCoreTests", dependencies: ["TunnelMasterCore"]),
     ]
 )

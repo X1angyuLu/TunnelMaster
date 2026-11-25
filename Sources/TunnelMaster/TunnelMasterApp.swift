@@ -2,14 +2,14 @@ import SwiftUI
 
 @main
 @MainActor
-struct TunnelMenuApp: App {
+struct TunnelMasterApp: App {
     @StateObject private var store = TunnelStore()
 
     var body: some Scene {
         MenuBarExtra {
             MenuView(store: store)
         } label: {
-            Label("TunnelMenu", systemImage: menuBarIcon)
+            Label("TunnelMaster", systemImage: menuBarIcon)
                 .labelStyle(.iconOnly)
                 .accessibilityLabel(menuBarTitle)
         }
@@ -29,10 +29,10 @@ struct TunnelMenuApp: App {
 
     private var menuBarTitle: String {
         switch store.status {
-        case .connected: "TunnelMenu，已连接"
-        case .connecting: "TunnelMenu，正在连接"
-        case .disconnecting: "TunnelMenu，正在断开"
-        case .disconnected: "TunnelMenu，已断开"
+        case .connected: "TunnelMaster，已连接"
+        case .connecting: "TunnelMaster，正在连接"
+        case .disconnecting: "TunnelMaster，正在断开"
+        case .disconnected: "TunnelMaster，已断开"
         }
     }
 }

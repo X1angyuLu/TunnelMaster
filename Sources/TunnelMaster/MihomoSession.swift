@@ -1,6 +1,6 @@
 import Darwin
 import Foundation
-import TunnelMenuCore
+import TunnelMasterCore
 
 enum SessionError: LocalizedError {
     case unavailablePort

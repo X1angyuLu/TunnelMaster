@@ -8,20 +8,20 @@ export CLANG_MODULE_CACHE_PATH="$root/.build/module-cache"
 export SWIFTPM_MODULECACHE_OVERRIDE="$root/.build/module-cache"
 build_args=(--disable-sandbox --build-system native -c release)
 swift build "${build_args[@]}"
-binary="$(swift build "${build_args[@]}" --show-bin-path)/TunnelMenu"
-bundle=dist/TunnelMenu.app
+binary="$(swift build "${build_args[@]}" --show-bin-path)/TunnelMaster"
+bundle=dist/TunnelMaster.app
 mkdir -p "$bundle/Contents/MacOS"
-install -m 755 "$binary" "$bundle/Contents/MacOS/TunnelMenu"
+install -m 755 "$binary" "$bundle/Contents/MacOS/TunnelMaster"
 
 cat > "$bundle/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key><string>TunnelMenu</string>
-    <key>CFBundleDisplayName</key><string>TunnelMenu</string>
-    <key>CFBundleExecutable</key><string>TunnelMenu</string>
-    <key>CFBundleIdentifier</key><string>com.x1angyulu.TunnelMenu</string>
+    <key>CFBundleName</key><string>TunnelMaster</string>
+    <key>CFBundleDisplayName</key><string>TunnelMaster</string>
+    <key>CFBundleExecutable</key><string>TunnelMaster</string>
+    <key>CFBundleIdentifier</key><string>com.x1angyulu.TunnelMaster</string>
     <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>0.1.0</string>

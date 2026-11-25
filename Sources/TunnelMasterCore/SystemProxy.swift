@@ -132,7 +132,7 @@ public struct SystemProxyController: Sendable {
         defer { AuthorizationFree(authorization, []) }
 
         guard let preferences = SCPreferencesCreateWithAuthorization(
-            nil, "TunnelMenu" as CFString, nil, authorization
+            nil, "TunnelMaster" as CFString, nil, authorization
         ), SCPreferencesLock(preferences, false) else {
             throw ProxyError.systemConfiguration
         }

@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-import TunnelMenuCore
+import TunnelMasterCore
 
 struct RuleConfigurationTests {
     private static let privateKey = Data(repeating: 1, count: 32).base64EncodedString()

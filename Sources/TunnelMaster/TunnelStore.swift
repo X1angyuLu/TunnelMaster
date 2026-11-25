@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
 import SwiftUI
-import TunnelMenuCore
+import TunnelMasterCore
 import UniformTypeIdentifiers
 
 enum TunnelMode: String {
@@ -42,6 +42,7 @@ final class TunnelStore: ObservableObject {
 
     init() {
         let defaults = UserDefaults.standard
+        Self.migratePreferences(defaults)
         mode = TunnelMode(rawValue: defaults.string(forKey: "routingMode") ?? "") ?? .rules
         directDomains = defaults.string(forKey: "directDomains") ?? """
         bilibili.com
@@ -57,8 +58,7 @@ final class TunnelStore: ObservableObject {
         proxyDomains = defaults.string(forKey: "proxyDomains") ?? ""
         useChinaIPRules = defaults.bool(forKey: "useChinaIPRules")
 
-        storage = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("TunnelMenu", isDirectory: true)
+        storage = Self.storageDirectory()
         systemProxy = SystemProxyController(stateURL: storage.appendingPathComponent("proxy-recovery.json"))
 
         do {
@@ -207,7 +207,7 @@ final class TunnelStore: ObservableObject {
                 observedFullTunnel = hasAnotherVPN
                 guard !hasAnotherVPN else {
                     status = .disconnected
-                    errorMessage = "请先断开当前 macOS VPN，再连接 TunnelMenu。"
+                    errorMessage = "请先断开当前 macOS VPN，再连接 TunnelMaster。"
                     return
                 }
 
@@ -260,6 +260,30 @@ final class TunnelStore: ObservableObject {
                 errorMessage = error.localizedDescription
                 refresh()
             }
+        }
+    }
+
+    private static func migratePreferences(_ defaults: UserDefaults) {
+        guard let bundleID = Bundle.main.bundleIdentifier,
+              let previous = defaults.persistentDomain(forName: "com.x1angyulu.TunnelMenu") else { return }
+        let current = defaults.persistentDomain(forName: bundleID) ?? [:]
+        for key in ["routingMode", "directDomains", "proxyDomains", "useChinaIPRules"] where current[key] == nil {
+            if let value = previous[key] { defaults.set(value, forKey: key) }
+        }
+    }
+
+    private static func storageDirectory() -> URL {
+        let files = FileManager.default
+        let support = files.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let current = support.appendingPathComponent("TunnelMaster", isDirectory: true)
+        let previous = support.appendingPathComponent("TunnelMenu", isDirectory: true)
+        guard !files.fileExists(atPath: current.path), files.fileExists(atPath: previous.path) else { return current }
+        do {
+            // Move the config and proxy recovery state together, without duplicating the private key.
+            try files.moveItem(at: previous, to: current)
+            return current
+        } catch {
+            return files.fileExists(atPath: previous.path) ? previous : current
         }
     }
 

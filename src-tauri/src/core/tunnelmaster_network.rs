@@ -44,6 +44,7 @@ pub async fn check_proxy(enable: bool) -> Result<bool> {
         if !own {
             *last = None;
         }
+        drop(last);
         if !enable {
             return Ok(own);
         }

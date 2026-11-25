@@ -35,10 +35,11 @@ pub fn observe_pointer(app: &AppHandle, event: &TrayIconEvent) {
         }
         TrayIconEvent::Click { button, .. } => {
             new_request();
-            if *button != MouseButton::Left && PREVIEW.swap(0, Ordering::AcqRel) != 0 {
-                if let Some(panel) = app.get_webview_window(LABEL) {
-                    let _ = panel.hide();
-                }
+            if *button != MouseButton::Left
+                && PREVIEW.swap(0, Ordering::AcqRel) != 0
+                && let Some(panel) = app.get_webview_window(LABEL)
+            {
+                let _ = panel.hide();
             }
         }
         _ => {}

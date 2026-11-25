@@ -304,6 +304,7 @@ pub async fn tunnelmaster_local_history(range: String) -> CmdResult<LocalHistory
         .filter(|rate| rate.at >= until - 60 && rate.at < until)
         .copied()
         .collect();
+    drop(state);
     Ok(LocalHistory {
         buckets,
         from,

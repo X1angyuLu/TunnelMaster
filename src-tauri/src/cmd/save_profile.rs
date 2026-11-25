@@ -55,7 +55,6 @@ where
 
     let profiles_dir = dirs::app_profiles_dir().stringify_err()?;
     let file_path = profiles_dir.join(rel_path.as_str());
-    let file_path_str = file_path.to_string_lossy().to_string();
 
     // 读取原始内容（在释放profiles_guard后进行）
     let original_existed = fs::try_exists(&file_path).await.map_err(|err| {
@@ -82,7 +81,6 @@ where
     save_profile_data(&file_path, &file_data, private).await?;
 
     let changes_applied = handle_saved_profile_file(
-        &file_path_str,
         &file_path,
         &original_content,
         original_existed,
@@ -145,7 +143,6 @@ fn profile_affects_runtime(profiles: &IProfiles, index: &str) -> bool {
 }
 
 async fn handle_saved_profile_file(
-    file_path_str: &str,
     file_path: &std::path::Path,
     original_content: &str,
     original_existed: bool,
@@ -162,7 +159,7 @@ async fn handle_saved_profile_file(
         (ValidationNoticeTarget::Runtime, "YAML配置文件")
     };
 
-    match CoreConfigValidator::validate_config_file_outcome(file_path_str, Some(is_merge_file)).await {
+    match CoreConfigValidator::validate_config_file_outcome(&file_path.to_string_lossy(), Some(is_merge_file)).await {
         Ok(outcome) if outcome.is_valid() => {}
         Ok(outcome) => {
             logging!(warn, Type::Config, "[cmd配置save] 文件验证失败: {}", outcome);

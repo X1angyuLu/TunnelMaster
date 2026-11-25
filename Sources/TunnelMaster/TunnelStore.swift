@@ -55,6 +55,7 @@ final class TunnelStore: ObservableObject {
     @Published private(set) var trafficHistory: [TrafficSample] = []
     @Published private(set) var historyRevision = 0
     @Published private(set) var historySaveIssue = false
+    let digitalOcean = DigitalOceanSource()
 
     private let storage: URL
     private let systemProxy: SystemProxyController

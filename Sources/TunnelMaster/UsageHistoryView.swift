@@ -5,6 +5,7 @@ import SwiftUI
 @MainActor
 struct UsageHistoryView: View {
     @ObservedObject var store: TunnelStore
+    @AppStorage("usageHistorySource") private var sourcePreference = ""
     @AppStorage("usageHistoryRange") private var range = UsageRange.week
     @StateObject private var state = UsageHistoryWindowState()
 
@@ -15,33 +16,42 @@ struct UsageHistoryView: View {
         VStack(spacing: 0) {
             header
             Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    if store.historySaveIssue {
-                        Label("最近的流量记录暂未保存", systemImage: "exclamationmark.circle")
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(14)
-                            .background(Color.orange.opacity(0.09), in: RoundedRectangle(cornerRadius: 10))
-                    }
-                    if state.loadFailed {
-                        loadError
-                    }
-                    if let report = state.report, report.period.range == range, report.totals.hasRecords {
-                        analytics(report)
-                    } else if state.report?.period.range == range, !state.loadFailed {
-                        emptyState
-                    } else if !state.loadFailed {
-                        ProgressView("正在读取流量记录…")
-                            .frame(maxWidth: .infinity, minHeight: 300)
-                    }
-                }
-                .padding(22)
-                .frame(maxWidth: 1180)
-                .frame(maxWidth: .infinity)
+            switch historySource.wrappedValue {
+            case .local:
+                localHistory
+            case .digitalOcean:
+                DigitalOceanUsageView(source: store.digitalOcean)
             }
         }
         .frame(minWidth: 760, minHeight: 610)
         .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private var localHistory: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                if store.historySaveIssue {
+                    Label("最近的流量记录暂未保存", systemImage: "exclamationmark.circle")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(14)
+                        .background(Color.orange.opacity(0.09), in: RoundedRectangle(cornerRadius: 10))
+                }
+                if state.loadFailed {
+                    loadError
+                }
+                if let report = state.report, report.period.range == range, report.totals.hasRecords {
+                    analytics(report)
+                } else if state.report?.period.range == range, !state.loadFailed {
+                    emptyState
+                } else if !state.loadFailed {
+                    ProgressView("正在读取流量记录…")
+                        .frame(maxWidth: .infinity, minHeight: 300)
+                }
+            }
+            .padding(22)
+            .frame(maxWidth: 1180)
+            .frame(maxWidth: .infinity)
+        }
         .task(id: LoadRequest(range: range, revision: store.historyRevision, retry: state.retry)) {
             await load()
         }
@@ -59,23 +69,46 @@ struct UsageHistoryView: View {
                 Text("流量统计")
                     .font(.system(size: 26, weight: .semibold, design: .rounded))
                     .accessibilityAddTraits(.isHeader)
-                Text(state.report.flatMap { $0.period.range == range ? periodLabel($0.period) : nil } ?? "TunnelMaster")
+                Text(historySubtitle)
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
             Spacer(minLength: 10)
-            Picker("统计时间范围", selection: $range) {
-                ForEach(UsageRange.allCases) { option in
-                    Text(option.rawValue).tag(option)
+            Picker("数据来源", selection: historySource) {
+                ForEach(HistoryDataSource.allCases) { source in
+                    Text(source.title).tag(source)
                 }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .frame(width: 360)
+            .frame(width: 155)
+
+            if historySource.wrappedValue == .local {
+                Picker("统计时间范围", selection: $range) {
+                    ForEach(UsageRange.allCases) { option in
+                        Text(option.rawValue).tag(option)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 305)
+            }
         }
         .padding(.horizontal, 22)
         .padding(.vertical, 16)
         .background(.regularMaterial)
+    }
+
+    private var historySource: Binding<HistoryDataSource> {
+        Binding {
+            HistoryDataSource(rawValue: sourcePreference) ?? (store.digitalOcean.dropletID == nil ? .local : .digitalOcean)
+        } set: { sourcePreference = $0.rawValue }
+    }
+
+    private var historySubtitle: String {
+        if historySource.wrappedValue == .digitalOcean { return "整台 Droplet 的公网流量" }
+        return state.report.flatMap { $0.period.range == range ? periodLabel($0.period) : nil } ?? "这台 Mac 的接管流量"
     }
 
     private var emptyState: some View {
@@ -536,6 +569,13 @@ struct UsageHistoryView: View {
         let revision: Int
         let retry: Int
     }
+}
+
+private enum HistoryDataSource: String, CaseIterable, Identifiable {
+    case local, digitalOcean
+
+    var id: Self { self }
+    var title: String { self == .local ? "本机" : "DigitalOcean" }
 }
 
 @MainActor

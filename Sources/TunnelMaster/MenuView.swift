@@ -13,18 +13,21 @@ struct MenuView: View {
     private let openHistory: @MainActor () -> Void
     private let detailController: MenuChartDetailController
     private let openChartDetail: @MainActor (MenuChartDetailContext) -> Void
+    private let closeMenu: @MainActor () -> Void
 
     init(
         store: TunnelStore,
         openHistory: @escaping @MainActor () -> Void,
         detailController: MenuChartDetailController,
-        openChartDetail: @escaping @MainActor (MenuChartDetailContext) -> Void
+        openChartDetail: @escaping @MainActor (MenuChartDetailContext) -> Void,
+        closeMenu: @escaping @MainActor () -> Void
     ) {
         self.store = store
         _serverSource = ObservedObject(wrappedValue: store.digitalOcean)
         self.openHistory = openHistory
         self.detailController = detailController
         self.openChartDetail = openChartDetail
+        self.closeMenu = closeMenu
     }
 
     var body: some View {
@@ -38,6 +41,7 @@ struct MenuView: View {
         .padding(15)
         .frame(width: 394)
         .onAppear { store.refresh() }
+        .onExitCommand(perform: closeMenu)
     }
 
     private var overview: some View {
@@ -134,7 +138,22 @@ struct MenuView: View {
             }
             .foregroundStyle(.secondary)
             .accessibilityElement(children: .combine)
+
+            closeButton
         }
+    }
+
+    private var closeButton: some View {
+        Button(action: closeMenu) {
+            Image(systemName: "xmark.circle.fill")
+                .font(.system(size: 15))
+                .foregroundStyle(.secondary)
+                .frame(width: 22, height: 22)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("关闭菜单")
+        .help("关闭菜单")
     }
 
     private var connectionCard: some View {
@@ -388,6 +407,7 @@ struct MenuView: View {
                 Spacer()
                 Button("返回") { editor.isEditing = false }
                     .buttonStyle(.borderless)
+                closeButton
             }
 
             Text("每行填写一个域名，规则同时匹配其子域名。")

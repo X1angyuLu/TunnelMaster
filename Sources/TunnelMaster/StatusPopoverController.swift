@@ -17,11 +17,12 @@ final class StatusPopoverController: NSObject, NSPopoverDelegate {
     private lazy var hosting: NSHostingController<MenuView> = NSHostingController(rootView: MenuView(
         store: store,
         openHistory: { [weak self] in
-            self?.detailController.dismiss()
+            self?.closeMenu()
             self?.openHistory()
         },
         detailController: detailController,
-        openChartDetail: { [weak self] context in self?.showChartDetail(context) }
+        openChartDetail: { [weak self] context in self?.showChartDetail(context) },
+        closeMenu: { [weak self] in self?.closeMenu() }
     ))
     private var statusObservation: AnyCancellable?
     private var buttonTracking: NSTrackingArea?
@@ -30,6 +31,7 @@ final class StatusPopoverController: NSObject, NSPopoverDelegate {
     private var presentation: Presentation?
     private var previewTask: Task<Void, Never>?
     private var dismissalTask: Task<Void, Never>?
+    private var suppressGlobeHover = false
 
     init(store: TunnelStore, openHistory: @escaping @MainActor () -> Void) {
         self.store = store
@@ -43,6 +45,7 @@ final class StatusPopoverController: NSObject, NSPopoverDelegate {
         popover.behavior = .transient
         popover.delegate = self
         detailController.onPointerLeft = { [weak self] in self?.scheduleDismissal() }
+        detailController.onEscape = { [weak self] in self?.closeMenu() }
 
         if let button = statusItem.button {
             button.target = self
@@ -67,13 +70,19 @@ final class StatusPopoverController: NSObject, NSPopoverDelegate {
     }
 
     @objc private func togglePopover(_ sender: NSStatusBarButton) {
-        if popover.isShown, presentation == .pinned {
-            cancelPreview()
-            cancelDismissal()
-            popover.close()
+        if popover.isShown {
+            closeMenu()
         } else {
             showPinned()
         }
+    }
+
+    private func closeMenu() {
+        suppressGlobeHover = containsPointer(statusItem.button)
+        cancelPreview()
+        cancelDismissal()
+        detailController.dismiss()
+        popover.close()
     }
 
     private func show(_ style: Presentation) {
@@ -99,7 +108,7 @@ final class StatusPopoverController: NSObject, NSPopoverDelegate {
     private func pointerEntered(_ event: NSEvent) {
         if event.trackingArea === buttonTracking {
             cancelDismissal()
-            guard !popover.isShown, previewTask == nil else { return }
+            guard !suppressGlobeHover, !popover.isShown, previewTask == nil else { return }
             previewTask = Task { [weak self] in
                 try? await Task.sleep(nanoseconds: 310_000_000)
                 guard let self, !Task.isCancelled else { return }
@@ -116,6 +125,7 @@ final class StatusPopoverController: NSObject, NSPopoverDelegate {
     @objc(mouseExited:)
     private func pointerExited(_ event: NSEvent) {
         if event.trackingArea === buttonTracking {
+            suppressGlobeHover = false
             cancelPreview()
         } else if event.trackingArea !== panelTracking {
             return
@@ -132,7 +142,7 @@ final class StatusPopoverController: NSObject, NSPopoverDelegate {
             dismissalTask = nil
             if presentation == .preview, !containsPointer(statusItem.button), !containsPointer(panelTrackingView),
                !detailController.isPointerInside {
-                popover.close()
+                closeMenu()
             }
         }
     }
@@ -154,9 +164,13 @@ final class StatusPopoverController: NSObject, NSPopoverDelegate {
     }
 
     func popoverShouldClose(_ popover: NSPopover) -> Bool {
-        // The anchor's own action decides whether to pin the preview or close it.
-        guard let type = NSApp.currentEvent?.type, type == .leftMouseDown || type == .leftMouseUp else { return true }
-        return !containsPointer(statusItem.button) && !containsPointer(panelTrackingView) && !detailController.isPointerInside
+        // Status-button clicks are handled by its action. The adjacent panel is part of the menu interaction.
+        switch NSApp.currentEvent?.type {
+        case .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp:
+            return !containsPointer(statusItem.button) && !detailController.isPointerInside
+        default:
+            return true
+        }
     }
 
     func popoverDidShow(_ notification: Notification) {

@@ -14,14 +14,16 @@ struct MenuChartDetailView: View {
     @StateObject private var chartSelection = MenuChartSelection()
     private let context: MenuChartDetailContext
     private let close: @MainActor () -> Void
+    private let onEscape: @MainActor () -> Void
 
     init(store: TunnelStore, context: MenuChartDetailContext, selection: MenuChartDetailSelection,
-         close: @escaping @MainActor () -> Void) {
+         close: @escaping @MainActor () -> Void, onEscape: @escaping @MainActor () -> Void) {
         self.store = store
         _server = ObservedObject(wrappedValue: store.digitalOcean)
         self.context = context
         self.selection = selection
         self.close = close
+        self.onEscape = onEscape
         _controls = StateObject(wrappedValue: MenuChartDetailControls(context: context, anchor: selection.selectedDate))
     }
 
@@ -56,7 +58,7 @@ struct MenuChartDetailView: View {
         .onChange(of: selection.selectedDate) { date in
             if let date, controls.source == context.source { anchor(date) }
         }
-        .onExitCommand(perform: close)
+        .onExitCommand(perform: onEscape)
     }
 
     private var header: some View {

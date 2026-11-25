@@ -4,6 +4,7 @@ import SwiftUI
 @MainActor
 final class MenuChartDetailController {
     var onPointerLeft: (@MainActor () -> Void)?
+    var onEscape: (@MainActor () -> Void)?
 
     var isPointerInside: Bool {
         guard let panel, panel.isVisible else { return false }
@@ -18,6 +19,7 @@ final class MenuChartDetailController {
     private var displayedContext: MenuChartDetailContext?
     private var isOverPlot = false
     private var panel: MenuChartDetailPanel?
+    private weak var attachedWindow: NSWindow?
     private var host: MenuChartDetailHost?
     private var previewTask: Task<Void, Never>?
     private var dismissalTask: Task<Void, Never>?
@@ -73,7 +75,7 @@ final class MenuChartDetailController {
         cancelDismissal()
 
         if panel?.isVisible == true {
-            if displayedContext != context || panel?.parent !== anchor.window { showPanel(takeKeyboard: false) }
+            if displayedContext != context || attachedWindow !== anchor.window { showPanel(takeKeyboard: false) }
         } else if previewTask == nil {
             previewTask = Task { [weak self] in
                 try? await Task.sleep(nanoseconds: 250_000_000)
@@ -103,8 +105,8 @@ final class MenuChartDetailController {
         suppressedAnchor = nil
         anchor = nil
         context = nil
+        attachedWindow = nil
         if let panel {
-            panel.parent?.removeChildWindow(panel)
             panel.orderOut(nil)
             panel.contentView = nil
         }
@@ -124,11 +126,11 @@ final class MenuChartDetailController {
         guard let parent = anchor?.window, parent.isVisible,
               let context, let screen = parent.screen ?? NSScreen.main else { return }
         let panel = panelForContext(context)
-        if panel.parent !== parent || !panel.isVisible {
-            panel.parent?.removeChildWindow(panel)
+        if attachedWindow !== parent || !panel.isVisible {
+            // AppKit refuses normal popover dismissal when it owns a child window.
+            attachedWindow = parent
             panel.level = parent.level
             panel.setFrame(Self.attachedFrame(parent: parent.frame, visible: screen.visibleFrame), display: false)
-            parent.addChildWindow(panel, ordered: .above)
             panel.orderFrontRegardless()
         }
         if takeKeyboard { panel.makeKey() }
@@ -177,14 +179,14 @@ final class MenuChartDetailController {
         panel.hasShadow = true
         panel.animationBehavior = .none
         panel.collectionBehavior = [.transient, .ignoresCycle, .fullScreenAuxiliary]
-        panel.closeDetail = { [weak self] in self?.closeFromDetail() }
+        panel.onEscape = { [weak self] in self?.onEscape?() }
         return panel
     }
 
     private func detailContent(_ context: MenuChartDetailContext) -> MenuChartDetailView {
-        MenuChartDetailView(store: store, context: context, selection: selection) { [weak self] in
+        MenuChartDetailView(store: store, context: context, selection: selection, close: { [weak self] in
             self?.closeFromDetail()
-        }
+        }, onEscape: { [weak self] in self?.onEscape?() })
     }
 
     private func scheduleDismissal() {
@@ -230,13 +232,13 @@ final class MenuChartDetailController {
 
 @MainActor
 private final class MenuChartDetailPanel: NSPanel {
-    var closeDetail: (@MainActor () -> Void)?
+    var onEscape: (@MainActor () -> Void)?
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
     override func cancelOperation(_ sender: Any?) {
-        closeDetail?()
+        onEscape?()
     }
 }
 

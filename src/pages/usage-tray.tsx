@@ -1,13 +1,12 @@
 import { Paper, ThemeProvider } from '@mui/material'
 
 import { UsageWorkspace } from '@/components/usage/usage-workspace'
-import { useVisibility } from '@/hooks/use-visibility'
 
-import { useCustomTheme } from './_layout/hooks'
+import { useCustomTheme, useLoadingOverlay } from './_layout/hooks'
 
 export default function UsageTrayPage() {
   const { theme } = useCustomTheme()
-  const visible = useVisibility()
+  useLoadingOverlay(Boolean(theme))
   return (
     <ThemeProvider theme={theme}>
       <Paper
@@ -21,7 +20,7 @@ export default function UsageTrayPage() {
           p: 1.25,
         }}
       >
-        {visible && <UsageWorkspace compact />}
+        <UsageWorkspace compact />
       </Paper>
     </ThemeProvider>
   )

@@ -1,6 +1,6 @@
 import { equal } from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import process from 'node:process'
@@ -46,7 +46,16 @@ try {
   )
   if (!chunk) throw new Error('Missing fixture entry')
   const page = join(directory, 'index.html')
-  await writeFile(page, '<!doctype html><meta charset="utf-8"><main></main>')
+  const shell = await readFile(
+    new URL('../src/index.html', import.meta.url),
+    'utf8',
+  )
+  await writeFile(
+    page,
+    shell
+      .replace('<div id="root"></div>', '<div id="root"><main></main></div>')
+      .replace(/<script type="module"[^>]*><\/script>/u, ''),
+  )
 
   browser = spawn(
     chrome,

@@ -5,6 +5,8 @@ import { initReactI18next } from 'react-i18next'
 import { SWRConfig } from 'swr'
 
 import usage from '@/locales/en/usage.json'
+import UsageTrayPage from '@/pages/usage-tray'
+import { ThemeModeProvider } from '@/services/states'
 
 import { UsageWorkspace } from './usage-workspace'
 
@@ -37,6 +39,14 @@ mockWindows('usage-tray')
 mockIPC((command, payload) => {
   const args = payload as { range?: string; force?: boolean; storage?: string }
   switch (command) {
+    case 'get_verge_config':
+      return {}
+    case 'plugin:window|is_visible':
+      return false
+    case 'plugin:event|listen':
+      return 1
+    case 'plugin:event|unlisten':
+      return
     case 'get_tunnelmaster_do_settings':
       return { ...settings, storage: settingsStorage }
     case 'set_tunnelmaster_do_storage':
@@ -152,15 +162,26 @@ async function run() {
   const container = document.querySelector('main')
   if (!container) throw new Error('Missing fixture root')
   const root = createRoot(container)
+  Object.defineProperty(document, 'visibilityState', {
+    configurable: true,
+    value: 'hidden',
+  })
   root.render(
     <SWRConfig value={{ provider: () => new Map() }}>
-      <UsageWorkspace compact />
+      <ThemeModeProvider initialState="light">
+        <UsageTrayPage />
+      </ThemeModeProvider>
     </SWRConfig>,
   )
   await waitFor(
     () => document.body.textContent?.includes('Test Droplet · sfo2'),
     'Configured server and region not visible in tray',
   )
+  await waitFor(() => {
+    const overlay = document.getElementById('initial-loading-overlay')
+    return !overlay || overlay.dataset.hidden === 'true'
+  }, 'Initial loading overlay still covers the traffic panel')
+  Reflect.deleteProperty(document, 'visibilityState')
   await waitFor(
     () =>
       summary()?.includes('Inbound coverage 50%') &&

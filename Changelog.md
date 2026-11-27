@@ -33,6 +33,10 @@
 
 - Windows：修复安装程序重新安装或覆盖时未提示退出运行中应用，导致卸载报错或覆盖失败
 
+**🍎 macOS**
+
+- Fix the connected menu-bar globe contrast with a system monochrome icon; keep the disconnected globe gray.
+
 </details>
 
 <details>

@@ -62,6 +62,15 @@ pub struct Tray {
 }
 
 impl TrayState {
+    #[cfg(target_os = "macos")]
+    fn is_template_icon(verge: &IVerge, is_custom_icon: bool) -> bool {
+        if is_custom_icon {
+            return verge.tray_icon.as_ref().is_none_or(|value| value == "monochrome");
+        }
+        verge.enable_system_proxy.unwrap_or(false)
+            || (verge.enable_tun_mode.unwrap_or(false) && crate::core::runstate::RUN_STATE.state().tun_capable())
+    }
+
     async fn get_tray_icon(verge: &IVerge) -> (bool, Cow<'_, [u8]>) {
         let tun_mode = verge.enable_tun_mode.unwrap_or(false) && crate::core::runstate::RUN_STATE.state().tun_capable();
         let system_mode = verge.enable_system_proxy.unwrap_or(false);
@@ -252,7 +261,7 @@ impl Tray {
         let template = {
             #[cfg(target_os = "macos")]
             {
-                is_custom_icon && verge.tray_icon.as_ref().is_none_or(|v| v == "monochrome")
+                TrayState::is_template_icon(verge, is_custom_icon)
             }
             #[cfg(not(target_os = "macos"))]
             {
@@ -377,7 +386,7 @@ impl Tray {
         let mut builder = TrayIconBuilder::with_id(TRAY_ID).icon(icon).icon_as_template(false);
         #[cfg(target_os = "macos")]
         {
-            let is_monochrome = is_custom_icon && verge.tray_icon.as_ref().is_none_or(|v| v == "monochrome");
+            let is_monochrome = TrayState::is_template_icon(&verge, is_custom_icon);
             builder = builder.icon_as_template(is_monochrome);
         }
 

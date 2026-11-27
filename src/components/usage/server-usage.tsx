@@ -224,7 +224,10 @@ export function ServerUsage({
         <TextField
           select
           size="small"
-          label={t('usage.serverName')}
+          label={compact ? undefined : t('usage.serverName')}
+          slotProps={{
+            select: { inputProps: { 'aria-label': t('usage.serverName') } },
+          }}
           value={dropletId}
           disabled={selecting || options.length === 0}
           onChange={(event) => void onSelect(event.target.value)}
@@ -233,6 +236,9 @@ export function ServerUsage({
             minWidth: 0,
             maxWidth: compact ? undefined : 420,
             '& .MuiSelect-select': { textOverflow: 'ellipsis' },
+            ...(compact && {
+              '& .MuiSelect-select': { py: 0.75, textOverflow: 'ellipsis' },
+            }),
           }}
         >
           {fallbackId && (
@@ -240,7 +246,8 @@ export function ServerUsage({
           )}
           {options.map(({ id, name, region }) => (
             <MenuItem value={id} key={id}>
-              {name || `Droplet #${id}`} · {region} · #{id}
+              {name || `Droplet #${id}`} · {region}
+              {!compact && ` · #${id}`}
             </MenuItem>
           ))}
         </TextField>
@@ -269,6 +276,7 @@ export function ServerUsage({
 
       <Paper
         variant="outlined"
+        data-usage-section={compact || undefined}
         sx={{ p: compact ? 1 : 2, borderRadius: compact ? 2 : 3 }}
       >
         <Stack spacing={compact ? 0.65 : 1.35}>
@@ -387,6 +395,7 @@ export function ServerUsage({
 
       <Paper
         variant="outlined"
+        data-usage-section={compact || undefined}
         sx={{ p: compact ? 1 : 2, borderRadius: compact ? 2 : 3 }}
       >
         <Stack spacing={compact ? 0.5 : 1.25}>
@@ -400,13 +409,15 @@ export function ServerUsage({
               flexWrap: 'wrap',
             }}
           >
-            <Typography
-              variant={compact ? 'subtitle2' : 'subtitle1'}
-              component="h2"
-              sx={{ fontWeight: 650 }}
-            >
-              {chartTitle}
-            </Typography>
+            {!compact && (
+              <Typography
+                variant="subtitle1"
+                component="h2"
+                sx={{ fontWeight: 650 }}
+              >
+                {chartTitle}
+              </Typography>
+            )}
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
               <UsageRangePicker<ServerDays>
                 options={serverRanges}
@@ -462,12 +473,8 @@ export function ServerUsage({
             <UsageChart
               key={days}
               title={chartTitle}
-              firstLabel={t(
-                compact ? 'usage.inboundEstimate' : 'usage.inbound',
-              )}
-              secondLabel={t(
-                compact ? 'usage.outboundEstimate' : 'usage.outbound',
-              )}
+              firstLabel={t('usage.inbound')}
+              secondLabel={t('usage.outbound')}
               points={points}
               from={report?.from ?? 0}
               until={report?.until ?? 0}

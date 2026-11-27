@@ -69,7 +69,7 @@ try {
       '--disable-component-update',
       '--disable-extensions',
       '--disable-sync',
-      '--window-size=402,510',
+      '--window-size=364,440',
       'about:blank',
     ],
     {
@@ -145,6 +145,16 @@ try {
       { expression, awaitPromise, returnByValue: true },
       sessionId,
     )
+  await send(
+    'Emulation.setDeviceMetricsOverride',
+    {
+      width: 364,
+      height: 440,
+      deviceScaleFactor: 2,
+      mobile: false,
+    },
+    sessionId,
+  )
   const { errorText } = await send(
     'Page.navigate',
     { url: pathToFileURL(page).href },
@@ -175,6 +185,30 @@ try {
     true,
     result.value?.failure ?? 'The fixture did not finish',
   )
+  if (process.env.TUNNELMASTER_USAGE_SCREENSHOT) {
+    const measured = await evaluate(
+      'Math.min(680, Math.ceil(document.querySelector("[data-usage-workspace]").getBoundingClientRect().height + 30))',
+    )
+    await send(
+      'Emulation.setDeviceMetricsOverride',
+      {
+        width: 364,
+        height: measured.result.value,
+        deviceScaleFactor: 2,
+        mobile: false,
+      },
+      sessionId,
+    )
+    await evaluate(
+      'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))',
+      true,
+    )
+    const screenshot = await send('Page.captureScreenshot', {}, sessionId)
+    await writeFile(
+      process.env.TUNNELMASTER_USAGE_SCREENSHOT,
+      Buffer.from(screenshot.data, 'base64'),
+    )
+  }
   console.log('Usage browser regression passed')
 } catch (error) {
   if (chromeLog) console.error(chromeLog)

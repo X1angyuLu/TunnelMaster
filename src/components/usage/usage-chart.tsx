@@ -197,10 +197,10 @@ export function UsageChart({
       </Stack>
       <Box
         sx={{
-          height: compact ? 104 : 'clamp(134px, 24vh, 244px)',
+          height: compact ? 112 : 'clamp(134px, 24vh, 244px)',
           borderRadius: 1.5,
           overflow: 'hidden',
-          backgroundColor: 'action.hover',
+          backgroundColor: compact ? 'transparent' : 'action.hover',
           '& svg:focus-visible': {
             outline: `2px solid ${theme.palette.primary.main} !important`,
             outlineOffset: -2,
@@ -224,17 +224,18 @@ export function UsageChart({
           }}
           onKeyDown={onKeyDown}
         >
-          {X_TICKS.map((tick) => (
-            <line
-              key={tick}
-              x1={tick * WIDTH}
-              x2={tick * WIDTH}
-              y1={0}
-              y2={HEIGHT}
-              stroke={theme.palette.divider}
-              vectorEffect="non-scaling-stroke"
-            />
-          ))}
+          {!compact &&
+            X_TICKS.map((tick) => (
+              <line
+                key={tick}
+                x1={tick * WIDTH}
+                x2={tick * WIDTH}
+                y1={0}
+                y2={HEIGHT}
+                stroke={theme.palette.divider}
+                vectorEffect="non-scaling-stroke"
+              />
+            ))}
           {[0.25, 0.5, 0.75].map((tick) => (
             <line
               key={tick}

@@ -43,6 +43,8 @@ mockIPC((command, payload) => {
       return {}
     case 'plugin:window|is_visible':
       return false
+    case 'plugin:window|set_size':
+      return
     case 'plugin:event|listen':
       return 1
     case 'plugin:event|unlisten':
@@ -62,6 +64,7 @@ mockIPC((command, payload) => {
         outboundGib: 15,
         coverage: 1,
         remainingGib: 85,
+        projectedAllowanceGib: 100,
       }
     case 'get_tunnelmaster_do_report':
       if (args.force) serverForceCount += 1
@@ -72,6 +75,17 @@ mockIPC((command, payload) => {
         inbound: { samples: [] },
         outbound: { samples: [] },
         buckets: [
+          ...[
+            12, 18, 15, 31, 27, 13, 6, 4, 8, 18, 23, 16, 13, 25, 42, 30, 14, 9,
+            21, 15, 32, 22, 19,
+          ].map((value, index) => ({
+            start: now - (24 - index) * 3600,
+            until: now - (23 - index) * 3600,
+            inboundBytes: value * 48_000,
+            outboundBytes: value * 52_000,
+            inboundCoveredSeconds: 3500,
+            outboundCoveredSeconds: 3500,
+          })),
           {
             start: now - 3600,
             until: now,
@@ -317,6 +331,17 @@ async function run() {
   await waitFor(
     () => settingsStorage === 'localFile',
     'Saved credential storage was not switched',
+  )
+  root.render(
+    <SWRConfig value={{ provider: () => new Map() }}>
+      <ThemeModeProvider initialState="light">
+        <UsageTrayPage />
+      </ThemeModeProvider>
+    </SWRConfig>,
+  )
+  await waitFor(
+    () => document.body.textContent?.includes('Test Droplet · sfo2') && chart(),
+    'Tray did not render again after closing the dashboard settings',
   )
 }
 

@@ -136,6 +136,7 @@ export function LocalUsage({ compact = false }: { compact?: boolean }) {
       {isPending && !data && <LinearProgress aria-label={t('usage.loading')} />}
       <Paper
         variant="outlined"
+        data-usage-section={compact || undefined}
         sx={{
           p: compact ? 1 : 2,
           borderRadius: compact ? 2 : 3,
@@ -185,6 +186,7 @@ export function LocalUsage({ compact = false }: { compact?: boolean }) {
       </Paper>
       <Paper
         variant="outlined"
+        data-usage-section={compact || undefined}
         sx={{ p: compact ? 1 : 2, borderRadius: compact ? 2 : 3 }}
       >
         <Stack spacing={compact ? 0.5 : 1.25}>

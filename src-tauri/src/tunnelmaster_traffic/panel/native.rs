@@ -59,10 +59,7 @@ async fn maybe_preview(app: AppHandle, request: u64, anchor: PhysicalPosition<f6
     if REQUEST.load(Ordering::Acquire) != request {
         return Ok(());
     }
-    let scale = app
-        .monitor_from_point(anchor.x, anchor.y)?
-        .map_or(1.0, |monitor| monitor.scale_factor());
-    let icon = Bounds::new(icon.position.to_physical(scale), icon.size.to_physical(scale));
+    let icon = Bounds::new(icon.position.to_physical(1.0), icon.size.to_physical(1.0));
     if !icon.contains(app.cursor_position()?) {
         return Ok(());
     }
@@ -138,8 +135,17 @@ fn panel(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     }
     let panel = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("/usage-tray".into()))
         .title("TunnelMaster Traffic")
-        .inner_size(402.0, 510.0)
+        .inner_size(364.0, 440.0)
         .decorations(false)
+        .transparent(true)
+        .shadow(true)
+        .effects(
+            tauri::window::EffectsBuilder::new()
+                .effect(tauri::window::Effect::Popover)
+                .state(tauri::window::EffectState::Active)
+                .radius(12.0)
+                .build(),
+        )
         .resizable(false)
         .always_on_top(true)
         .skip_taskbar(true)
@@ -159,24 +165,60 @@ fn panel(app: &AppHandle) -> tauri::Result<WebviewWindow> {
             PREVIEW.store(0, Ordering::Release);
             let _ = target.hide();
         }
+        WindowEvent::Resized(_) if target.is_visible().unwrap_or(false) => {
+            let panel = target.clone();
+            AsyncHandler::spawn(move || async move {
+                let _ = position_panel(&panel, PhysicalPosition::new(0.0, 0.0));
+            });
+        }
         _ => {}
     });
     Ok(panel)
 }
 
 fn position_panel(panel: &WebviewWindow, cursor: PhysicalPosition<f64>) -> tauri::Result<()> {
-    if let Some(monitor) = panel.monitor_from_point(cursor.x, cursor.y)? {
+    let icon = panel
+        .app_handle()
+        .tray_by_id(crate::core::tray::TRAY_ID)
+        .and_then(|tray| tray.rect().ok().flatten())
+        .map_or_else(
+            || {
+                Bounds::new(
+                    PhysicalPosition::new(cursor.x as i32, cursor.y as i32),
+                    tauri::PhysicalSize::new(1, 1),
+                )
+            },
+            |rect| Bounds::new(rect.position.to_physical(1.0), rect.size.to_physical(1.0)),
+        );
+    let center = PhysicalPosition::new(
+        f64::from(icon.position.x) + f64::from(icon.size.width) / 2.0,
+        f64::from(icon.position.y) + f64::from(icon.size.height) / 2.0,
+    );
+    let monitor = panel
+        .available_monitors()?
+        .into_iter()
+        .find(|monitor| Bounds::new(*monitor.position(), *monitor.size()).contains(center))
+        .or(panel.current_monitor()?);
+    if let Some(monitor) = monitor {
         let area = monitor.work_area();
-        let size = panel.outer_size()?;
-        let left = f64::from(area.position.x);
-        let right = left + (f64::from(area.size.width) - f64::from(size.width)).max(0.0);
-        let top = f64::from(area.position.y);
-        let bottom = top + (f64::from(area.size.height) - f64::from(size.height)).max(0.0);
-        let x = (cursor.x - f64::from(size.width) / 2.0).clamp(left, right);
-        let y = (cursor.y + 14.0 * monitor.scale_factor()).clamp(top, bottom);
-        panel.set_position(PhysicalPosition::new(x, y))?;
+        panel.set_position(anchored_position(
+            icon,
+            Bounds::new(area.position, area.size),
+            panel.outer_size()?,
+            monitor.scale_factor(),
+        ))?;
     }
     Ok(())
+}
+
+fn anchored_position(icon: Bounds, area: Bounds, size: tauri::PhysicalSize<u32>, scale: f64) -> PhysicalPosition<f64> {
+    let left = f64::from(area.position.x);
+    let right = left + f64::from(area.size.width.saturating_sub(size.width));
+    let top = f64::from(area.position.y);
+    let bottom = top + f64::from(area.size.height.saturating_sub(size.height));
+    let x = f64::from(icon.position.x) + (f64::from(icon.size.width) - f64::from(size.width)) / 2.0;
+    let y = f64::from(icon.position.y) + f64::from(icon.size.height);
+    PhysicalPosition::new(x.clamp(left, right), (y.max(top) + 4.0 * scale).clamp(top, bottom))
 }
 
 #[derive(Clone, Copy)]
@@ -194,5 +236,29 @@ impl Bounds {
         let dx = point.x - f64::from(self.position.x);
         let dy = point.y - f64::from(self.position.y);
         dx >= 0.0 && dx <= f64::from(self.size.width) && dy >= 0.0 && dy <= f64::from(self.size.height)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn anchors_below_the_menu_bar_on_retina_and_offset_displays() {
+        let retina = anchored_position(
+            Bounds::new(PhysicalPosition::new(1280, 0), tauri::PhysicalSize::new(44, 74)),
+            Bounds::new(PhysicalPosition::new(0, 74), tauri::PhysicalSize::new(3024, 1890)),
+            tauri::PhysicalSize::new(728, 880),
+            2.0,
+        );
+        assert_eq!(retina, PhysicalPosition::new(938.0, 82.0));
+
+        let edge = anchored_position(
+            Bounds::new(PhysicalPosition::new(3820, -200), tauri::PhysicalSize::new(20, 24)),
+            Bounds::new(PhysicalPosition::new(1920, -176), tauri::PhysicalSize::new(1920, 1056)),
+            tauri::PhysicalSize::new(364, 440),
+            1.0,
+        );
+        assert_eq!(edge, PhysicalPosition::new(3476.0, -172.0));
     }
 }

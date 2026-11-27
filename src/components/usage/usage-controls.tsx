@@ -74,6 +74,11 @@ export function UsageMetric({
           display: 'block',
           color: emphasized ? 'warning.main' : 'text.primary',
           fontVariantNumeric: 'tabular-nums',
+          ...(compact && {
+            fontSize: 21,
+            fontWeight: 600,
+            letterSpacing: '-.55px',
+          }),
           lineHeight: 1.35,
           wordBreak: 'break-word',
         }}

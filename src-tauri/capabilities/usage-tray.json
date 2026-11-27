@@ -2,5 +2,5 @@
   "identifier": "usage-tray",
   "local": true,
   "windows": ["usage-tray"],
-  "permissions": ["core:default", "core:window:allow-hide"]
+  "permissions": ["core:default", "core:window:allow-hide", "core:window:allow-set-size"]
 }

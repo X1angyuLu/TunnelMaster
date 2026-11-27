@@ -92,7 +92,7 @@ export function UsageWorkspace({ compact = false }: { compact?: boolean }) {
   }, [closeTray, compact])
 
   return (
-    <Stack spacing={compact ? 1 : 2}>
+    <Stack spacing={compact ? 1 : 2} data-usage-workspace>
       <Stack
         direction="row"
         spacing={1}

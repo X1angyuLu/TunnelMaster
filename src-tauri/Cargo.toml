@@ -41,6 +41,7 @@ clash-verge-limiter = { workspace = true }
 tauri-plugin-clash-verge-sysinfo = { workspace = true }
 tauri-plugin-clipboard-manager = { workspace = true }
 tauri = { workspace = true, features = [
+  "macos-private-api",
   "protocol-asset",
   "devtools",
   "tracing",

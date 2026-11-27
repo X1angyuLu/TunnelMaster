@@ -1060,6 +1060,22 @@ export const translationKeys = [
   'usage.range30d',
   'usage.range365d',
   'usage.chartInstructions',
+  'usage.connectedState',
+  'usage.disconnectedState',
+  'usage.systemProxy',
+  'usage.profile',
+  'usage.proxyMode',
+  'usage.ruleMode',
+  'usage.globalMode',
+  'usage.directMode',
+  'usage.setupAction',
+  'usage.tunNeedsService',
+  'usage.rulesAction',
+  'usage.connectionsAction',
+  'usage.settingsAction',
+  'usage.actionFailed',
+  'usage.actionBusy',
+  'usage.profilesAction',
 ] as const
 
 export type TranslationKey = (typeof translationKeys)[number]

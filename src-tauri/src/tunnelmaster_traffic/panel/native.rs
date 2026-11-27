@@ -135,15 +135,17 @@ fn panel(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     }
     let panel = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("/usage-tray".into()))
         .title("TunnelMaster Traffic")
-        .inner_size(364.0, 440.0)
+        .inner_size(320.0, 440.0)
         .decorations(false)
         .transparent(true)
+        .background_color(tauri::window::Color(0, 0, 0, 0))
         .shadow(true)
         .effects(
             tauri::window::EffectsBuilder::new()
-                .effect(tauri::window::Effect::Popover)
+                .effect(tauri::window::Effect::LiquidGlassRegular)
+                .effect(tauri::window::Effect::Menu)
                 .state(tauri::window::EffectState::Active)
-                .radius(12.0)
+                .radius(16.0)
                 .build(),
         )
         .resizable(false)

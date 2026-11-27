@@ -38,11 +38,15 @@
 <details>
 <summary><strong> ✨ 新增功能 </strong></summary>
 
+**🍎 macOS**
 
+- Add connection controls, hot mode switching and live transfer rates to the menu panel.
 </details>
 
 <details>
 <summary><strong> 🚀 优化改进 </strong></summary>
 
+**🍎 macOS**
 
+- Prioritize traffic usage in a compact menu panel with a frosted glass background.
 </details>

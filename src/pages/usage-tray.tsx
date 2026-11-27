@@ -1,17 +1,32 @@
-import { GlobalStyles, Paper, ThemeProvider, createTheme } from '@mui/material'
+import {
+  Alert,
+  GlobalStyles,
+  Paper,
+  Stack,
+  ThemeProvider,
+  createTheme,
+} from '@mui/material'
 import { LogicalSize } from '@tauri-apps/api/dpi'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+import { TrayConnection } from '@/components/usage/tray-connection'
 import { UsageWorkspace } from '@/components/usage/usage-workspace'
+import { useEventBus } from '@/services/bus'
 
 import { useCustomTheme, useLoadingOverlay } from './_layout/hooks'
 
 export default function UsageTrayPage() {
   const containerRef = useRef<HTMLElement>(null)
+  const [error, setError] = useState<string>()
+  useEventBus(
+    useCallback(([status, message]: [string, string]) => {
+      if (status === 'error') setError(message)
+    }, []),
+  )
   useEffect(() => {
     const panel = containerRef.current
-    const content = panel?.querySelector('[data-usage-workspace]')
+    const content = panel?.querySelector('[data-usage-panel-content]')
     if (!panel || !content) return
     let previous = 0
     const observer = new ResizeObserver(() => {
@@ -28,7 +43,7 @@ export default function UsageTrayPage() {
       if (height === previous) return
       previous = height
       void getCurrentWindow()
-        .setSize(new LogicalSize(364, height))
+        .setSize(new LogicalSize(320, height))
         .catch(console.error)
     })
     observer.observe(content)
@@ -47,11 +62,21 @@ export default function UsageTrayPage() {
         body2: { fontSize: 12 },
       },
       palette: {
+        primary: { main: dark ? '#75c4d0' : '#33899b' },
         info: { main: dark ? '#75c4d0' : '#33899b' },
         secondary: { main: dark ? '#e5b08c' : '#bc7952' },
+        text: {
+          primary: dark ? '#f1f3f2' : '#292b2a',
+          secondary: dark ? '#afb6b5' : '#777e7d',
+        },
         divider: dark ? 'rgba(255,255,255,.10)' : 'rgba(0,0,0,.08)',
       },
       components: {
+        MuiButton: {
+          styleOverrides: {
+            root: { textTransform: 'none', fontSize: 12, minWidth: 0 },
+          },
+        },
         MuiPaper: {
           styleOverrides: {
             outlined: { background: 'transparent', border: 0, borderRadius: 0 },
@@ -121,14 +146,12 @@ export default function UsageTrayPage() {
           height: '100dvh',
           boxSizing: 'border-box',
           overflowY: 'auto',
-          p: 1.75,
-          borderRadius: '12px',
-          border: '1px solid',
-          borderColor: 'divider',
+          p: 2,
+          borderRadius: '16px',
           bgcolor:
             theme.palette.mode === 'dark'
-              ? 'rgba(29,30,34,.84)'
-              : 'rgba(250,250,252,.87)',
+              ? 'rgba(24,26,30,.22) !important'
+              : 'rgba(255,255,255,.28) !important',
           '& [data-usage-section]': {
             border: 0,
             borderRadius: 0,
@@ -140,7 +163,16 @@ export default function UsageTrayPage() {
           '& [data-usage-section]:last-child': { borderBottom: 0, pb: 0 },
         }}
       >
-        <UsageWorkspace compact />
+        <Stack spacing={1.5} data-usage-panel-content>
+          <TrayConnection onError={setError}>
+            {error && (
+              <Alert severity="warning" sx={{ py: 0 }}>
+                {error}
+              </Alert>
+            )}
+            <UsageWorkspace compact />
+          </TrayConnection>
+        </Stack>
       </Paper>
     </ThemeProvider>
   )

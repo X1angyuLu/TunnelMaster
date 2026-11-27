@@ -1,4 +1,5 @@
 import { equal } from 'node:assert/strict'
+import { Buffer } from 'node:buffer'
 import { spawn } from 'node:child_process'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -69,7 +70,7 @@ try {
       '--disable-component-update',
       '--disable-extensions',
       '--disable-sync',
-      '--window-size=364,440',
+      '--window-size=320,440',
       'about:blank',
     ],
     {
@@ -148,7 +149,7 @@ try {
   await send(
     'Emulation.setDeviceMetricsOverride',
     {
-      width: 364,
+      width: 320,
       height: 440,
       deviceScaleFactor: 2,
       mobile: false,
@@ -187,12 +188,12 @@ try {
   )
   if (process.env.TUNNELMASTER_USAGE_SCREENSHOT) {
     const measured = await evaluate(
-      'Math.min(680, Math.ceil(document.querySelector("[data-usage-workspace]").getBoundingClientRect().height + 30))',
+      'Math.min(900, Math.ceil(document.querySelector("[data-usage-panel-content]").getBoundingClientRect().height + 30))',
     )
     await send(
       'Emulation.setDeviceMetricsOverride',
       {
-        width: 364,
+        width: 320,
         height: measured.result.value,
         deviceScaleFactor: 2,
         mobile: false,

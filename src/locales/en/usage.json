@@ -92,5 +92,21 @@
   "range14d": "14 days",
   "range30d": "30 days",
   "range365d": "1 year",
-  "chartInstructions": "Use the left and right arrow keys to inspect samples."
+  "chartInstructions": "Use the left and right arrow keys to inspect samples.",
+  "connectedState": "Connected",
+  "disconnectedState": "Disconnected",
+  "systemProxy": "System proxy",
+  "profile": "Configuration",
+  "proxyMode": "Proxy mode",
+  "ruleMode": "Rules",
+  "globalMode": "Global",
+  "directMode": "Direct",
+  "setupAction": "Set up",
+  "tunNeedsService": "Install the privileged service in Settings to enable TUN.",
+  "rulesAction": "Rules",
+  "connectionsAction": "Connections",
+  "settingsAction": "Settings",
+  "actionFailed": "The operation could not be completed.",
+  "actionBusy": "The core is busy. Try again shortly.",
+  "profilesAction": "Profiles"
 }

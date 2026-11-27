@@ -117,7 +117,7 @@ export function UsageWorkspace({ compact = false }: { compact?: boolean }) {
           <ToggleButton value="local">{t('usage.local')}</ToggleButton>
           <ToggleButton value="server">{t('usage.server')}</ToggleButton>
         </ToggleButtonGroup>
-        {view === 'local' && <EgressProbe compact={compact} />}
+        {view === 'local' && !compact && <EgressProbe compact={false} />}
         {compact ? (
           <Stack direction="row" spacing={0.5}>
             <Tooltip title={t('usage.open')}>

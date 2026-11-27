@@ -224,9 +224,11 @@ export function ServerUsage({
         <TextField
           select
           size="small"
+          variant={compact ? 'standard' : 'outlined'}
           label={compact ? undefined : t('usage.serverName')}
           slotProps={{
             select: { inputProps: { 'aria-label': t('usage.serverName') } },
+            input: compact ? { disableUnderline: true } : undefined,
           }}
           value={dropletId}
           disabled={selecting || options.length === 0}
@@ -237,7 +239,12 @@ export function ServerUsage({
             maxWidth: compact ? undefined : 420,
             '& .MuiSelect-select': { textOverflow: 'ellipsis' },
             ...(compact && {
-              '& .MuiSelect-select': { py: 0.75, textOverflow: 'ellipsis' },
+              '& .MuiSelect-select': {
+                py: 0.25,
+                fontSize: 11,
+                color: 'text.secondary',
+                textOverflow: 'ellipsis',
+              },
             }),
           }}
         >

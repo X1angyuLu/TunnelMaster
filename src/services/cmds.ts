@@ -33,7 +33,9 @@ export type {
 export const tunnelmasterUsage = {
   probeEgress: commands.probeTunnelmasterEgress,
   localHistory: (range: string) => commands.tunnelmasterLocalHistory(range),
-  open: () => commands.openTunnelmasterUsage(),
+  open: (
+    page?: '/usage' | '/settings' | '/rules' | '/connections' | '/profile',
+  ) => commands.openTunnelmasterUsage(page ?? null),
   settings: () => commands.getTunnelmasterDoSettings(),
   migrateCredentials: () => commands.migrateTunnelmasterDoCredentials(),
   saveCredentials: (

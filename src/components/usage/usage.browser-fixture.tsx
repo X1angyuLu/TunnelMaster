@@ -6,7 +6,9 @@ import { SWRConfig } from 'swr'
 
 import usage from '@/locales/en/usage.json'
 import UsageTrayPage from '@/pages/usage-tray'
+import { AppDataProvider } from '@/providers/app-data-provider'
 import { ThemeModeProvider } from '@/services/states'
+import { AppStoreProvider } from '@/store/app-store'
 
 import { UsageWorkspace } from './usage-workspace'
 
@@ -35,12 +37,73 @@ let settingsStorage = settings.storage
 let requestedRange = ''
 let openedMain = false
 let probed = false
+let systemProxyEnabled = true
+let clashMode = 'rule'
+let openedPage: string | null = null
 mockWindows('usage-tray')
 mockIPC((command, payload) => {
   const args = payload as { range?: string; force?: boolean; storage?: string }
   switch (command) {
     case 'get_verge_config':
+      return {
+        enable_system_proxy: systemProxyEnabled,
+        enable_tun_mode: false,
+        verge_mixed_port: 17897,
+        proxy_host: '127.0.0.1',
+        proxy_auto_config: false,
+      }
+    case 'get_runtime_state':
+      return {
+        mode: 'Sidecar',
+        service: 'absent',
+        serviceUnavailableReason: null,
+        pendingAction: null,
+        sidecarAllowed: true,
+        isAdmin: false,
+        opInFlight: false,
+        serviceUsable: false,
+        tunCapable: false,
+        serviceNeedsAttention: false,
+      }
+    case 'get_pending_failures':
+      return []
+    case 'get_sidecar_failure':
+      return null
+    case 'get_runtime_config':
+      return { 'mixed-port': 17897, mode: clashMode }
+    case 'get_clash_info':
+      return { mixed_port: 17897 }
+    case 'get_clash_mode':
+      return clashMode
+    case 'patch_clash_mode':
+      clashMode = (payload as { payload: string }).payload
+      return
+    case 'patch_verge_config':
+      systemProxyEnabled = (
+        payload as { payload: { enable_system_proxy: boolean } }
+      ).payload.enable_system_proxy
+      return
+    case 'get_proxy_view':
       return {}
+    case 'get_sys_proxy':
+      return { enable: systemProxyEnabled, server: '127.0.0.1:17897' }
+    case 'get_auto_proxy':
+      return { enable: false, url: '' }
+    case 'get_embedded_server_port':
+      return 18888
+    case 'get_profiles':
+      return {
+        current: 'Ltmwg-test',
+        items: [{ uid: 'Ltmwg-test', name: 'SFO2', type: 'local' }],
+      }
+    case 'plugin:mihomo|get_base_config':
+      return { mixedPort: 17897, mode: clashMode }
+    case 'plugin:mihomo|get_version':
+      return { version: 'test' }
+    case 'plugin:mihomo|get_rules':
+      return { rules: [] }
+    case 'plugin:mihomo|get_rule_providers':
+      return { providers: {} }
     case 'plugin:window|is_visible':
       return false
     case 'plugin:window|set_size':
@@ -139,6 +202,7 @@ mockIPC((command, payload) => {
       return
     case 'open_tunnelmaster_usage':
       openedMain = true
+      openedPage = (payload as { page?: string | null }).page ?? '/usage'
       return
     case 'probe_tunnelmaster_egress':
       probed = true
@@ -176,17 +240,22 @@ async function run() {
   const container = document.querySelector('main')
   if (!container) throw new Error('Missing fixture root')
   const root = createRoot(container)
+  const tray = (
+    <SWRConfig value={{}}>
+      <ThemeModeProvider initialState="light">
+        <AppStoreProvider>
+          <AppDataProvider>
+            <UsageTrayPage />
+          </AppDataProvider>
+        </AppStoreProvider>
+      </ThemeModeProvider>
+    </SWRConfig>
+  )
   Object.defineProperty(document, 'visibilityState', {
     configurable: true,
     value: 'hidden',
   })
-  root.render(
-    <SWRConfig value={{ provider: () => new Map() }}>
-      <ThemeModeProvider initialState="light">
-        <UsageTrayPage />
-      </ThemeModeProvider>
-    </SWRConfig>,
-  )
+  root.render(tray)
   await waitFor(
     () => document.body.textContent?.includes('Test Droplet · sfo2'),
     'Configured server and region not visible in tray',
@@ -196,6 +265,59 @@ async function run() {
     return !overlay || overlay.dataset.hidden === 'true'
   }, 'Initial loading overlay still covers the traffic panel')
   Reflect.deleteProperty(document, 'visibilityState')
+  const panelColor = getComputedStyle(
+    document.querySelector('[data-usage-panel]')!,
+  ).backgroundColor
+  check(
+    panelColor.startsWith('rgba(') &&
+      Number.parseFloat(panelColor.split(',').at(-1)!) <= 0.35,
+    'The panel covers the native material with an opaque background',
+  )
+  await waitFor(
+    () =>
+      document.body.textContent?.includes('Connected') &&
+      button('Global')?.disabled === false,
+    'Connection controls did not become ready',
+  )
+  button('Global')?.click()
+  await waitFor(
+    () =>
+      clashMode === 'global' &&
+      button('Global')?.getAttribute('aria-pressed') === 'true' &&
+      button('Rules')?.disabled === false,
+    'Global mode did not apply',
+  )
+  button('Rules')?.click()
+  await waitFor(
+    () =>
+      clashMode === 'rule' &&
+      button('Rules')?.getAttribute('aria-pressed') === 'true' &&
+      button('Rules')?.disabled === false,
+    'Rule mode did not apply',
+  )
+  const proxySwitch = () =>
+    [
+      ...document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'),
+    ].find((item) =>
+      item.closest('label')?.textContent?.includes('System proxy'),
+    )
+  await waitFor(
+    () => proxySwitch()?.disabled === false,
+    'System proxy switch is unavailable',
+  )
+  proxySwitch()?.click()
+  await waitFor(
+    () =>
+      !systemProxyEnabled &&
+      proxySwitch()?.disabled === false &&
+      !proxySwitch()?.checked,
+    'System proxy did not disable and reconcile',
+  )
+  proxySwitch()?.click()
+  await waitFor(
+    () => systemProxyEnabled && proxySwitch()?.checked,
+    'System proxy did not enable and reconcile',
+  )
   await waitFor(
     () =>
       summary()?.includes('Inbound coverage 50%') &&
@@ -298,6 +420,11 @@ async function run() {
     'Escape did not hide the tray with a selected chart sample',
   )
   check(!openedMain, 'Inspecting tray history opened the main window')
+  button('Settings')?.click()
+  await waitFor(
+    () => openedPage === '/settings',
+    'Settings action did not request the settings page',
+  )
   root.render(<UsageWorkspace key="full" />)
   await waitFor(
     () => button('DigitalOcean settings')?.disabled === false,
@@ -332,13 +459,7 @@ async function run() {
     () => settingsStorage === 'localFile',
     'Saved credential storage was not switched',
   )
-  root.render(
-    <SWRConfig value={{ provider: () => new Map() }}>
-      <ThemeModeProvider initialState="light">
-        <UsageTrayPage />
-      </ThemeModeProvider>
-    </SWRConfig>,
-  )
+  root.render(tray)
   await waitFor(
     () => document.body.textContent?.includes('Test Droplet · sfo2') && chart(),
     'Tray did not render again after closing the dashboard settings',

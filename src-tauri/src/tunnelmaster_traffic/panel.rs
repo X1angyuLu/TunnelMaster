@@ -16,7 +16,11 @@ const LABEL: &str = "usage-tray";
 
 #[tauri::command]
 #[specta::specta]
-pub async fn open_tunnelmaster_usage(app: AppHandle) -> CmdResult<()> {
+pub async fn open_tunnelmaster_usage(app: AppHandle, page: Option<String>) -> CmdResult<()> {
+    let page = page.as_deref().unwrap_or("/usage");
+    if !matches!(page, "/usage" | "/settings" | "/rules" | "/connections" | "/profile") {
+        return Err(CommandFailure::plain("Unsupported TunnelMaster page"));
+    }
     if let Some(panel) = app.get_webview_window(LABEL) {
         let _ = panel.hide();
     }
@@ -28,7 +32,7 @@ pub async fn open_tunnelmaster_usage(app: AppHandle) -> CmdResult<()> {
     let url = window
         .url()
         .map_err(CommandFailure::plain)?
-        .join("/usage")
+        .join(page)
         .map_err(CommandFailure::plain)?;
     window.navigate(url).map_err(CommandFailure::plain)
 }

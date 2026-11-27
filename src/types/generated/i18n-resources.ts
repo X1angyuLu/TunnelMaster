@@ -1628,6 +1628,8 @@ export interface TranslationResources {
     usage: {
       aboutServer: string
       accrued: string
+      actionBusy: string
+      actionFailed: string
       allowanceNote: string
       billing: string
       bucketVolume: string
@@ -1636,10 +1638,14 @@ export interface TranslationResources {
       configure: string
       confirmRemove: string
       connected: string
+      connectedState: string
+      connectionsAction: string
       coverage: string
       coverageWarning: string
       dailyUTC: string
+      directMode: string
       disconnect: string
+      disconnectedState: string
       done: string
       download: string
       downloadNow: string
@@ -1652,6 +1658,7 @@ export interface TranslationResources {
       egressHint: string
       empty: string
       fileNotice: string
+      globalMode: string
       hourlyUTC: string
       inbound: string
       inboundCoverage: string
@@ -1686,7 +1693,10 @@ export interface TranslationResources {
       peakUp: string
       planUnavailable: string
       previousPeriod: string
+      profile: string
+      profilesAction: string
       projected: string
+      proxyMode: string
       range: string
       range14d: string
       range24h: string
@@ -1698,6 +1708,8 @@ export interface TranslationResources {
       range90d: string
       refresh: string
       refreshDroplets: string
+      ruleMode: string
+      rulesAction: string
       sampledRates: string
       samplingPaused: string
       save: string
@@ -1709,12 +1721,16 @@ export interface TranslationResources {
       serverVolume: string
       sessions: string
       settings: string
+      settingsAction: string
       setup: string
+      setupAction: string
       storage: string
+      systemProxy: string
       title: string
       token: string
       tokenHelp: string
       tokenReplace: string
+      tunNeedsService: string
       unavailable: string
       upload: string
       uploadNow: string

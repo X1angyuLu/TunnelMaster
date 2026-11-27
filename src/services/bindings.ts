@@ -82,7 +82,8 @@ export const commands = {
     __TAURI_INVOKE<LocalHistory>('tunnelmaster_local_history', { range }),
   probeTunnelmasterEgress: () =>
     __TAURI_INVOKE<EgressProbe>('probe_tunnelmaster_egress'),
-  openTunnelmasterUsage: () => __TAURI_INVOKE<null>('open_tunnelmaster_usage'),
+  openTunnelmasterUsage: (page: string | null) =>
+    __TAURI_INVOKE<null>('open_tunnelmaster_usage', { page }),
   probeListener: (request: ListenerProbe) =>
     __TAURI_INVOKE<ListenerProbeOutcome>('probe_listener', { request }),
   saveProxyPorts: (settings: ProxyPortSettings) =>

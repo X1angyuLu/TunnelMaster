@@ -92,5 +92,21 @@
   "range14d": "14 天",
   "range30d": "30 天",
   "range365d": "1 年",
-  "chartInstructions": "使用左右方向鍵查看取樣。"
+  "chartInstructions": "使用左右方向鍵查看取樣。",
+  "connectedState": "已連線",
+  "disconnectedState": "未連線",
+  "systemProxy": "系統代理",
+  "profile": "目前設定",
+  "proxyMode": "代理模式",
+  "ruleMode": "規則分流",
+  "globalMode": "全部代理",
+  "directMode": "全部直連",
+  "setupAction": "設定",
+  "tunNeedsService": "在設定中安裝服務元件後可啟用 TUN。",
+  "rulesAction": "規則",
+  "connectionsAction": "連線紀錄",
+  "settingsAction": "設定",
+  "actionFailed": "操作未能完成。",
+  "actionBusy": "核心正在切換，請稍後重試。",
+  "profilesAction": "設定檔"
 }

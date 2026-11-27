@@ -29,6 +29,10 @@
   "productName": "TunnelMaster",
   "identifier": "com.x1angyulu.TunnelMaster.verge",
   "plugins": {
+    "updater": {
+      "pubkey": "",
+      "endpoints": []
+    },
     "deep-link": {
       "desktop": {
         "schemes": ["tunnelmaster-verge"]

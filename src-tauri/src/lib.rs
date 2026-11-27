@@ -367,6 +367,7 @@ pub fn run() -> std::process::ExitCode {
 
     #[cfg(not(feature = "clippy"))]
     let app = builder.build(tauri::generate_context!()).unwrap_or_else(|e| {
+        eprintln!("[TunnelMaster] Failed to build Tauri application: {e}");
         logging!(error, Type::Setup, "Failed to build Tauri application: {}", e);
         std::process::exit(1);
     });

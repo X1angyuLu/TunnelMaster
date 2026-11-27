@@ -123,16 +123,12 @@ export const LayoutSidebar = (props: LayoutSidebarProps) => {
       {/* Logo */}
       <div className="the-logo" data-tauri-drag-region="false">
         <div
+          className="the-logo__brand"
           data-tauri-drag-region="true"
-          style={{
-            height: '27px',
-            display: 'flex',
-            justifyContent: 'space-between',
-          }}
         >
-          <LanguageRounded color="primary" sx={{ fontSize: 27, mr: 0.8 }} />
+          <LanguageRounded color="primary" />
           {!isCollapsed && (
-            <Typography sx={{ fontWeight: 750, whiteSpace: 'nowrap' }}>
+            <Typography className="the-logo__name">
               TunnelMaster
             </Typography>
           )}

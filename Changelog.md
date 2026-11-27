@@ -35,6 +35,7 @@
 
 **🍎 macOS**
 
+- Fix the sidebar title being pushed outside its column and restore the collapsed globe.
 - Fix the connected menu-bar globe contrast with a system monochrome icon; keep the disconnected globe gray.
 
 </details>

@@ -39,11 +39,36 @@
         align-self: stretch;
         box-sizing: border-box;
 
-        img,
-        svg {
+        img {
           width: 100%;
           height: 100%;
           pointer-events: none;
+        }
+
+        &__brand {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          width: 100%;
+          min-width: 0;
+          height: 27px;
+        }
+
+        .MuiSvgIcon-root {
+          flex: 0 0 27px;
+          width: 27px;
+          height: 27px;
+          pointer-events: none;
+        }
+
+        &__name {
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          font-size: 14px;
+          font-weight: 750;
+          line-height: 27px;
         }
 
         .the-newbtn {
@@ -298,10 +323,6 @@
         height: 100% !important;
         align-items: center !important;
         justify-content: center !important;
-      }
-
-      .the-logo > div > svg:last-child {
-        display: none !important;
       }
 
       .the-logo .MuiSvgIcon-root {

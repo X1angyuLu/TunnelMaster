@@ -18,7 +18,10 @@ const LABEL: &str = "usage-tray";
 #[specta::specta]
 pub async fn open_tunnelmaster_usage(app: AppHandle, page: Option<String>) -> CmdResult<()> {
     let page = page.as_deref().unwrap_or("/usage");
-    if !matches!(page, "/usage" | "/settings" | "/rules" | "/connections" | "/profile") {
+    if !matches!(
+        page,
+        "/" | "/usage" | "/settings" | "/rules" | "/connections" | "/profile"
+    ) {
         return Err(CommandFailure::plain("Unsupported TunnelMaster page"));
     }
     if let Some(panel) = app.get_webview_window(LABEL) {

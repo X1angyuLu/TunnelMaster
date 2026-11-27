@@ -46,6 +46,7 @@
 **🍎 macOS**
 
 - Add connection controls, hot mode switching and live transfer rates to the menu panel.
+- Add a home shortcut to the globe and app name at the top of the menu panel.
 </details>
 
 <details>

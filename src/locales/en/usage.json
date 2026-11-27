@@ -108,5 +108,6 @@
   "settingsAction": "Settings",
   "actionFailed": "The operation could not be completed.",
   "actionBusy": "The core is busy. Try again shortly.",
-  "profilesAction": "Profiles"
+  "profilesAction": "Profiles",
+  "openHome": "Open TunnelMaster home"
 }

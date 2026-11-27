@@ -5,6 +5,7 @@ import SettingsOutlined from '@mui/icons-material/SettingsOutlined'
 import {
   Box,
   Button,
+  ButtonBase,
   FormControlLabel,
   MenuItem,
   Stack,
@@ -83,26 +84,51 @@ export function TrayConnection({
       ['getRuntimeConfig'],
     ])
   }
-  const open = (page: '/settings' | '/rules' | '/connections' | '/profile') =>
+  const open = (page: '/' | '/settings' | '/rules' | '/connections' | '/profile') =>
     void perform(() => tunnelmasterUsage.open(page))
 
   return (
     <Stack spacing={1.5}>
       <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
-        <PublicRounded
-          sx={{
-            fontSize: 20,
-            color: connected ? 'info.main' : 'text.disabled',
-          }}
-        />
-        <Box sx={{ flex: 1 }}>
-          <Typography sx={{ fontSize: 13, fontWeight: 650 }}>
-            TunnelMaster
-          </Typography>
-          <Typography variant="caption" color="text.secondary">
-            {t(connected ? 'usage.connectedState' : 'usage.disconnectedState')}
-          </Typography>
-        </Box>
+        <Tooltip title={t('usage.openHome')}>
+          <ButtonBase
+            aria-label={t('usage.openHome')}
+            disabled={busy}
+            onClick={() => open('/')}
+            sx={{
+              flex: 1,
+              minWidth: 0,
+              gap: 1,
+              justifyContent: 'flex-start',
+              textAlign: 'left',
+              borderRadius: 1,
+              p: 0.5,
+              m: -0.5,
+              '&:hover': { bgcolor: 'action.hover' },
+              '&.Mui-focusVisible': {
+                outline: '2px solid',
+                outlineColor: 'primary.main',
+                outlineOffset: 2,
+              },
+            }}
+          >
+            <PublicRounded
+              sx={{
+                fontSize: 20,
+                flexShrink: 0,
+                color: connected ? 'info.main' : 'text.disabled',
+              }}
+            />
+            <Box>
+              <Typography sx={{ fontSize: 13, fontWeight: 650 }}>
+                TunnelMaster
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {t(connected ? 'usage.connectedState' : 'usage.disconnectedState')}
+              </Typography>
+            </Box>
+          </ButtonBase>
+        </Tooltip>
         <FormControlLabel
           sx={{ m: 0, gap: 0.5 }}
           label={

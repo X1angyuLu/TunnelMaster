@@ -1076,6 +1076,7 @@ export const translationKeys = [
   'usage.actionFailed',
   'usage.actionBusy',
   'usage.profilesAction',
+  'usage.openHome',
 ] as const
 
 export type TranslationKey = (typeof translationKeys)[number]

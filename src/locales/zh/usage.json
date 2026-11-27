@@ -108,5 +108,6 @@
   "settingsAction": "设置",
   "actionFailed": "操作未能完成。",
   "actionBusy": "内核正在切换，请稍后重试。",
-  "profilesAction": "配置"
+  "profilesAction": "配置",
+  "openHome": "打开 TunnelMaster 首页"
 }

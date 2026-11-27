@@ -108,5 +108,6 @@
   "settingsAction": "設定",
   "actionFailed": "操作未能完成。",
   "actionBusy": "核心正在切換，請稍後重試。",
-  "profilesAction": "設定檔"
+  "profilesAction": "設定檔",
+  "openHome": "開啟 TunnelMaster 首頁"
 }

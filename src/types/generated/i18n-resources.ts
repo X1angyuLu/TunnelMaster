@@ -1685,6 +1685,7 @@ export interface TranslationResources {
       noDroplets: string
       nominal: string
       open: string
+      openHome: string
       outbound: string
       outboundCoverage: string
       outboundEstimate: string

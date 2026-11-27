@@ -2,7 +2,7 @@ name: TunnelMaster macOS integration
 
 on:
   push:
-    branches: [codex/verge]
+    branches: [main]
     paths:
       - .github/workflows/tunnelmaster-macos.yml
       - scripts/test-macos-tun.sh
